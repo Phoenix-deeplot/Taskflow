@@ -16,7 +16,7 @@
     working: ["review", "queued", "blocked"],
     review: ["done", "queued", "blocked"],
     done: ["queued"],
-    blocked: ["queued", "working", "clarification"],
+    blocked: ["queued", "clarification"],
   };
   let importDrafts = [];
   let importSource = "";
@@ -118,8 +118,10 @@ ${JSON.stringify(snapshot.workspace?.requirements || [], null, 2)}
     const task = getState().tasks.find((item) => item.id === taskId);
     if (!task || (task.status || "queued") !== "queued") return;
     transitionTask(taskId, "working");
+    await api.flush?.();
     const startedTask = getState().tasks.find((item) => item.id === taskId);
-    const promptText = buildTaskPrompt(startedTask, startedTask?.contextSnapshot);
+    if (startedTask?.status !== "working") return;
+    const promptText = startedTask?.contextSnapshot?.promptText || buildTaskPrompt(startedTask, startedTask?.contextSnapshot);
     try {
       await navigator.clipboard.writeText(promptText);
       api.toast("任务已启动；指令已复制，请交给卡片上标记的 Agent 执行");
@@ -144,6 +146,11 @@ ${JSON.stringify(snapshot.workspace?.requirements || [], null, 2)}
       return;
     }
     let blockedReason = task.blockedReason || "";
+    if (target === "review" && !task.suggestion?.trim()) {
+      const result = prompt("提交验收前请填写本次执行结果摘要", "")?.trim() || "";
+      if (!result) { api.toast("提交验收需要结果摘要"); api.render(); return; }
+      task.suggestion = result;
+    }
     if (target === "blocked") {
       blockedReason = prompt("请填写阻塞原因（必填）", blockedReason)?.trim() || "";
       if (!blockedReason) {
@@ -152,6 +159,10 @@ ${JSON.stringify(snapshot.workspace?.requirements || [], null, 2)}
         return;
       }
     }
+    if (target === "queued" && ["working", "review", "done"].includes(current)) {
+      blockedReason = prompt(current === "review" ? "请填写验收退回意见" : current === "done" ? "请填写重新打开任务的原因" : "请填写退回待执行的原因", blockedReason)?.trim() || "";
+      if (!blockedReason) { api.toast("退回或重开任务需要填写原因"); api.render(); return; }
+    }
     const before = JSON.parse(JSON.stringify(task));
     task.runs = Array.isArray(task.runs) ? task.runs : [];
     if (target === "working" && !task.runs.some((run) => run.status === "running")) {
@@ -159,7 +170,7 @@ ${JSON.stringify(snapshot.workspace?.requirements || [], null, 2)}
       task.runs.push({ id: `RUN-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, contextSnapshotId: task.contextSnapshot.id, status: "running", startedAt: new Date().toISOString(), finishedAt: null });
     }
     task.status = target;
-    task.blockedReason = target === "blocked" ? blockedReason : "";
+    task.blockedReason = ["blocked", "queued"].includes(target) ? blockedReason : "";
     task.updatedAt = new Date().toISOString();
     const activeRun = task.runs.slice().reverse().find((run) => run.status === "running");
     if (activeRun && ["review", "done", "blocked"].includes(target)) {

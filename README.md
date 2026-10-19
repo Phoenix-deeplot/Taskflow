@@ -31,7 +31,7 @@ node scripts/serve-local.mjs --port 4180
 
 不需要先运行 `npm install`。修改 `dist/index.html` 或 `dist/enhancements.js` 后刷新浏览器即可。
 
-首次启动会在项目目录创建 `data/workbench.sqlite`。这是本地单人工作区数据库，不会上传到云端；整个 `data/` 目录已加入 Git 忽略规则。浏览器已有的旧数据会在数据库为空时迁移一次，并在浏览器 `localStorage` 留一份迁移备份。迁移不会覆盖已经初始化的 SQLite 数据库。
+首次启动会在项目目录创建 `data/requirements.sqlite`，按需求、任务、快照、Run、事件等多张表保存。这是本地单人工作区数据库，不会上传到云端；整个 `data/` 目录已加入 Git 忽略规则。浏览器已有的旧数据会在数据库为空时做可追溯迁移。若数据库与浏览器缓存不同，会先把两边状态写入备份键，再提示或按更新时间请你选择，不静默覆盖。
 
 可用 `GET /api/health` 检查本地服务状态。要把数据库放到其他目录，可通过环境变量 `WORKBENCH_DATA_DIR` 指定；日常备份仍建议使用页面的“JSON 备份”。
 
@@ -42,14 +42,14 @@ node scripts/serve-local.mjs --port 4180
 - 导入草稿：粘贴 Prompt/文本，或选择 JSON、TXT、Markdown、DOCX；先预览候选需求，再确认导入。简单编号列表和标题可自动拆成草稿，不会自动调用 AI。
 - AI 协作：为需求记录 ChatGPT、DeepSeek 或 Claude 任务；待执行任务可直接点“执行”，状态变为执行中并复制带上下文快照的指令，仍需手动交给对应 Agent。
 - 执行看板：任务按待澄清、待执行、执行中、待验收、已完成、阻塞分栏；可启动下一项或卡片任务；状态变更限制在允许的流转内，阻塞需写原因，完成需人工确认。
-- 状态保存：SQLite 为主存储、localStorage 为浏览器缓存；保存失败时提示并回退到缓存，不会静默声称数据库已保存。
+- 状态保存：SQLite 关系表为主存储、localStorage 为浏览器缓存；保存失败时提示并回退到缓存，下次启动会比较更新时间并让你选择较新的缓存是否恢复。
 - 任务启动：冻结全局需求摘要、关联需求和任务说明为版本化上下文快照，同时追加运行记录；目前仍需手动把复制出的指令交给 Agent。
 - 变更历史：本浏览器内记录需求和任务的变更。
 - JSON：整库导出和按 ID 合并导入；可以载入 15 条工具模块样例。
 
 ## 数据与密钥
 
-当前主数据保存在项目目录 `data/workbench.sqlite`，只供本机服务使用。浏览器 `localStorage` 保留为缓存及旧数据迁移备份。清理项目目录、换电脑或重装前先下载 JSON 备份。此原型没有共享数据库、账号、Agent 自动领取接口或模型 API 调用。
+当前主数据保存在项目目录 `data/requirements.sqlite`，只供本机服务使用。浏览器 `localStorage` 保留为缓存及冲突备份。清理项目目录、换电脑或重装前先下载 JSON 备份。状态机、Run、快照、验收和事件由服务端领域层处理；尚无共享数据库、账号、Agent 自动领取或模型 API 调用。
 
 不要在浏览器页面、`localStorage`、需求导出 JSON 或 Git 文件中放模型 API Key。后续如需工作台直接调用模型，应增加服务端 API，由服务端从环境变量/密钥管理中读取 Key；外部 Agent 自带模型凭证时，工作台只需发放短时任务访问凭证，不需要获得 Agent 的模型 Key。
 
@@ -59,7 +59,7 @@ node scripts/serve-local.mjs --port 4180
 | --- | --- | --- |
 | 粘贴 Prompt、文档、JSON 导入 | 先解析为待确认草稿；用户确认后才写入；重复 ID 跳过 | 已有本地原型；解析需人工核对 |
 | 执行看板 | 按状态分栏；显示负责人、需求和任务说明 | 已有本地原型；依赖和文件占用待补 |
-| 状态流转 | 只允许有效状态转换；阻塞必须有原因；完成需人工确认；记录事件时间 | 已在看板实现本地状态规则；Agent 权限控制待后端 |
+| 状态流转 | 只允许有效状态转换；阻塞必须有原因；完成需人工确认；记录事件时间 | 本地 API 服务端校验；还没有用户/Agent 权限认证 |
 | Agent 对接 | 定义任务读取、领取/认领、心跳/续租、成果提交和失败回报接口；先支持一个执行器 | 待定义/实现 |
 | AI 澄清与拆分 | 服务端调用模型并产出任务草稿；人确认后生成正式任务；记录模型和用量 | 待实现；需安全配置服务端 Key |
 | 共享状态 | 多人和 Agent 读写同一份任务、决策、依赖及成果 | 待实现；当前仅本机 SQLite 单用户 |
@@ -77,8 +77,8 @@ node scripts/serve-local.mjs --port 4180
 ## 目录
 
 - `dist/index.html`：当前单页应用。
-- `scripts/serve-local.mjs`：本地静态服务和 SQLite JSON 状态 API。
-- `scripts/local-store.mjs`：SQLite 单文档存储层。
-- `data/workbench.sqlite`：首次运行时创建的本地数据库（Git 忽略）。
-- `tests/local-store.test.mjs`：本地存储和数据校验测试。
+- `scripts/serve-local.mjs`：本地静态服务和 API 启动入口。
+- `server/`：多表 SQLite、领域服务、状态机、兼容旧页面的状态适配和 HTTP API。
+- `data/requirements.sqlite`：首次运行时创建的本地数据库（Git 忽略）。
+- `tests/`：领域、迁移策略、本地 HTTP API 和生命周期测试。
 - `README.md`：本地运行说明与 V1 验收清单。

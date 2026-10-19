@@ -5,7 +5,7 @@ import {
   findTransition, operationsFor,
 } from "./state-machine.mjs";
 import {
-  WorkbenchError, conflict, invalid, newId, nonEmpty, notFound, parseJson,
+  WorkbenchError, canonicalize, conflict, invalid, newId, nonEmpty, notFound, parseJson,
 } from "./util.mjs";
 
 const REQUIREMENT_FIELDS = {
@@ -15,7 +15,7 @@ const REQUIREMENT_FIELDS = {
 };
 const TASK_FIELDS = {
   requirementId: "requirement_id", provider: "provider", executorType: "executor_type",
-  assignee: "assignee", taskText: "task_text",
+  assignee: "assignee", taskText: "task_text", resultNote: "result_note",
 };
 
 export const toRequirement = (r) => r && ({
@@ -26,7 +26,7 @@ export const toRequirement = (r) => r && ({
 export const toTask = (r) => r && ({
   id: r.id, requirementId: r.requirement_id, revision: r.revision, status: r.status,
   provider: r.provider, executorType: r.executor_type, assignee: r.assignee, taskText: r.task_text,
-  acceptance: parseJson(r.acceptance_json, []), fileScope: parseJson(r.file_scope_json, []),
+  resultNote: r.result_note ?? "", acceptance: parseJson(r.acceptance_json, []), fileScope: parseJson(r.file_scope_json, []),
   blockedReason: r.blocked_reason, legacyRequirementTitle: r.legacy_requirement_title,
   legacyRequirementModule: r.legacy_requirement_module, createdAt: r.created_at, updatedAt: r.updated_at,
 });
@@ -150,6 +150,27 @@ export function createWorkbench(db, { clock = () => new Date().toISOString(), ac
     });
   }
 
+  /** Undoes a soft delete. Optional `patch` applies in the same revision bump (e.g. re-adding an id from a backup). */
+  function restoreRequirement(id, patch = {}) {
+    return tx(() => {
+      const before = requireRequirementRow(id);
+      if (!before.deleted_at) throw conflict(`需求 ${id} 没有被删除`);
+      if (patch.title !== undefined && !nonEmpty(patch.title)) throw invalid("需求标题不能为空");
+      db.prepare("UPDATE requirements SET deleted_at = NULL, revision = revision + 1, updated_at = ? WHERE id = ?").run(clock(), id);
+      const hasPatch = Object.keys(patch).length > 0;
+      if (hasPatch) updateRequirement(id, patch);
+      const after = toRequirement(requireRequirementRow(id));
+      emit("requirement", id, "requirement.restored", { before: toRequirement(before), after });
+      return after;
+    });
+  }
+
+  /**
+   * Monotonic token for "has anything changed since I loaded?". Every mutation appends an event,
+   * so the highest event id is a cheap, reliable version of the whole workspace.
+   */
+  function stateVersion() { return one(db, "SELECT COALESCE(MAX(id), 0) AS v FROM events").v; }
+
   function getRequirement(id) { return toRequirement(requireRequirementRow(id)); }
 
   function listRequirements({ includeDeleted = false, decision, targetVersion, query } = {}) {
@@ -167,6 +188,7 @@ export function createWorkbench(db, { clock = () => new Date().toISOString(), ac
   // ---------- tasks ----------
   function createTask(input = {}) {
     if (!nonEmpty(input.taskText)) throw invalid("任务说明不能为空");
+    if (input.resultNote !== undefined && typeof input.resultNote !== "string") throw invalid("备注必须是文本");
     const status = input.status ?? "queued";
     if (!["clarification", "queued"].includes(status)) throw invalid("新任务只能从“待澄清”或“待执行”开始");
     const acceptance = stringList(input.acceptance, "验收标准") ?? [];
@@ -183,9 +205,9 @@ export function createWorkbench(db, { clock = () => new Date().toISOString(), ac
       } else id = uniqueId("TASK", "tasks");
       const now = clock();
       db.prepare(`INSERT INTO tasks (id, workspace_id, requirement_id, revision, status, provider, executor_type, assignee, task_text,
-                  acceptance_json, file_scope_json, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+                  result_note, acceptance_json, file_scope_json, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(id, workspaceId, input.requirementId ?? null, status, input.provider ?? "", input.executorType ?? "manual_handoff",
-          input.assignee ?? "", input.taskText.trim(), JSON.stringify(acceptance), JSON.stringify(fileScope), now, now);
+          input.assignee ?? "", input.taskText.trim(), input.resultNote ?? "", JSON.stringify(acceptance), JSON.stringify(fileScope), now, now);
       const created = toTask(requireTaskRow(id));
       emit("task", id, "task.created", { after: created });
       return created;
@@ -203,6 +225,7 @@ export function createWorkbench(db, { clock = () => new Date().toISOString(), ac
       for (const [key, column] of Object.entries(TASK_FIELDS)) {
         if (patch[key] === undefined) continue;
         if (key === "taskText" && !nonEmpty(patch.taskText)) throw invalid("任务说明不能为空");
+        if (key === "resultNote" && typeof patch.resultNote !== "string") throw invalid("备注必须是文本");
         if (key === "requirementId" && patch.requirementId !== null) {
           const requirement = requireRequirementRow(patch.requirementId);
           if (requirement.deleted_at) throw conflict(`需求 ${patch.requirementId} 已删除`);
@@ -462,6 +485,104 @@ export function createWorkbench(db, { clock = () => new Date().toISOString(), ac
     });
   }
 
+  // ---------- manual split and progress ----------
+  /**
+   * Turns one requirement into several tasks (and optional dependencies between them) in one transaction.
+   * Each item may carry a `key`; `dependsOn` lists keys of other items in the same batch.
+   */
+  function splitRequirement(requirementId, items = []) {
+    if (!Array.isArray(items) || !items.length) throw invalid("拆分至少需要一条任务");
+    if (items.length > 50) throw invalid("一次最多拆分 50 条任务");
+    const keys = items.map((item, index) => (nonEmpty(item?.key) ? item.key : `#${index + 1}`));
+    if (new Set(keys).size !== keys.length) throw invalid("拆分任务的 key 不能重复");
+    items.forEach((item, index) => {
+      for (const dep of item?.dependsOn ?? []) {
+        if (!keys.includes(dep)) throw invalid(`任务 ${keys[index]} 依赖了不存在的 key：${dep}`);
+        if (dep === keys[index]) throw invalid(`任务 ${keys[index]} 不能依赖自己`);
+      }
+    });
+    return tx(() => {
+      const requirement = requireRequirementRow(requirementId);
+      if (requirement.deleted_at) throw conflict(`需求 ${requirementId} 已删除，不能拆分`);
+      const created = items.map((item) => createTask({ ...item, requirementId }));
+      const idByKey = new Map(keys.map((key, index) => [key, created[index].id]));
+      const dependencies = [];
+      items.forEach((item, index) => {
+        for (const dep of item.dependsOn ?? []) {
+          addDependency(created[index].id, idByKey.get(dep));
+          dependencies.push({ taskId: created[index].id, dependsOnTaskId: idByKey.get(dep) });
+        }
+      });
+      emit("requirement", requirementId, "requirement.split", { taskIds: created.map((task) => task.id), dependencies });
+      return { tasks: created.map((task) => getTask(task.id)), dependencies };
+    });
+  }
+
+  const emptyProgress = (requirementId) => ({
+    requirementId, total: 0, done: 0, open: 0, percent: 0, byStatus: Object.fromEntries(TASK_STATUSES.map((status) => [status, 0])),
+  });
+
+  /** Progress is derived from tasks every time; it is never stored on the requirement. */
+  function requirementProgress(requirementId) {
+    const progress = new Map();
+    const where = requirementId ? "AND requirement_id = ?" : "AND requirement_id IS NOT NULL";
+    const params = requirementId ? [workspaceId, requirementId] : [workspaceId];
+    for (const row of all(db, `SELECT requirement_id, status, COUNT(*) AS n FROM tasks WHERE workspace_id = ? ${where} GROUP BY requirement_id, status`, ...params)) {
+      const entry = progress.get(row.requirement_id) ?? emptyProgress(row.requirement_id);
+      entry.byStatus[row.status] = row.n;
+      entry.total += row.n;
+      progress.set(row.requirement_id, entry);
+    }
+    for (const entry of progress.values()) {
+      entry.done = entry.byStatus.done;
+      entry.open = entry.total - entry.done;
+      entry.percent = entry.total ? Math.round((entry.done / entry.total) * 100) : 0;
+    }
+    if (requirementId) {
+      requireRequirementRow(requirementId);
+      return progress.get(requirementId) ?? emptyProgress(requirementId);
+    }
+    return Object.fromEntries(progress);
+  }
+
+  // ---------- global context versions ----------
+  const toContext = (r) => r && ({
+    id: r.id, revision: r.revision, rules: parseJson(r.rules_json, {}), createdBy: r.created_by, createdAt: r.created_at,
+  });
+  const CONTEXT_LISTS = ["rules", "glossary", "constraints"];
+
+  function getContext() {
+    return toContext(one(db, "SELECT * FROM workspace_context_versions WHERE workspace_id = ? ORDER BY revision DESC LIMIT 1", workspaceId));
+  }
+  function listContextVersions() {
+    return all(db, "SELECT * FROM workspace_context_versions WHERE workspace_id = ? ORDER BY revision DESC", workspaceId).map(toContext);
+  }
+
+  /** Appends a new global-context version (never edits an old one) and bumps the workspace revision. */
+  function appendContextVersion(rules = {}) {
+    if (!rules || typeof rules !== "object" || Array.isArray(rules)) throw invalid("全局上下文必须是对象");
+    const next = {};
+    for (const key of CONTEXT_LISTS) {
+      const list = rules[key] ?? [];
+      if (!Array.isArray(list) || list.length > 200) throw invalid(`${key} 必须是不超过 200 条的数组`);
+      if (list.some((entry) => (typeof entry === "string" ? entry.length > 2000 : !entry || typeof entry !== "object"))) {
+        throw invalid(`${key} 中的每一项必须是字符串（或术语对象），且不超过 2000 字`);
+      }
+      next[key] = list;
+    }
+    return tx(() => {
+      const current = getContext();
+      if (JSON.stringify(canonicalize(current.rules)) === JSON.stringify(canonicalize(next))) throw invalid("全局上下文没有变化");
+      const revision = current.revision + 1;
+      const id = `CTX-${revision}`;
+      db.prepare("INSERT INTO workspace_context_versions (id, workspace_id, revision, rules_json, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+        .run(id, workspaceId, revision, JSON.stringify(next), actorId, clock());
+      db.prepare("UPDATE workspaces SET revision = revision + 1 WHERE id = ?").run(workspaceId);
+      emit("workspace", workspaceId, "context.versioned", { fromRevision: current.revision, toRevision: revision });
+      return getContext();
+    });
+  }
+
   // ---------- reads ----------
   function listRuns(taskId) {
     requireTaskRow(taskId);
@@ -500,14 +621,16 @@ export function createWorkbench(db, { clock = () => new Date().toISOString(), ac
       snapshots: rows("task_context_snapshots", "created_at, id"),
       runs: rows("task_runs", "started_at, id"),
       events: rows("events", "id"),
+      migrationSources: rows("migration_sources", "id"),
     };
   }
 
   return {
     workspaceId,
-    createRequirement, updateRequirement, deleteRequirement, getRequirement, listRequirements,
+    createRequirement, updateRequirement, deleteRequirement, restoreRequirement, getRequirement, listRequirements, stateVersion,
     createTask, updateTask, getTask, listTasks,
-    addDependency, removeDependency, getReadiness,
+    addDependency, removeDependency, getReadiness, splitRequirement, requirementProgress,
+    getContext, listContextVersions, appendContextVersion,
     startTask, submitResult, reportFailure, transitionTask, acceptTask, rejectTask, reopenTask,
     listRuns, getSnapshot, listEvents, exportAll,
   };

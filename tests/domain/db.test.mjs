@@ -8,7 +8,7 @@ import { count, makeClock, memoryWorkbench, tempDirectory } from "./helpers.mjs"
 
 test("fresh database is migrated and seeded with the single local workspace", () => {
   const db = openDatabase(":memory:");
-  assert.equal(schemaVersion(db), 1);
+  assert.equal(schemaVersion(db), 2);
   assert.equal(count(db, "workspaces"), 1);
   assert.equal(db.prepare("SELECT id FROM workspaces").get().id, "WS-LOCAL");
   assert.equal(count(db, "workspace_context_versions"), 1);

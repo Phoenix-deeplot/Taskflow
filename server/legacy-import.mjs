@@ -121,7 +121,7 @@ export function planLegacyImport(db, state) {
     const row = {
       id: task.id, requirement_id: linked ? task.featureId : null, revision: 1, status,
       provider: text(task.model), executor_type: "manual_handoff", assignee: text(task.assignee), task_text: text(task.task),
-      acceptance_json: "[]", file_scope_json: "[]", blocked_reason: blockedReason,
+      result_note: text(task.suggestion), acceptance_json: "[]", file_scope_json: "[]", blocked_reason: blockedReason,
       legacy_requirement_title: linked ? null : text(task.featureTitle) || null,
       legacy_requirement_module: linked ? null : text(task.featureModule) || null,
       created_at: isoOrNow(task.createdAt, now), updated_at: isoOrNow(task.updatedAt, isoOrNow(task.createdAt, now)),
@@ -139,8 +139,9 @@ export function planLegacyImport(db, state) {
     report.counts.tasks.new += 1;
     rows.tasks.push(row);
 
+    // Only tasks that actually got going have a run history. A note on a queued/blocked task stays a note (result_note).
     const suggestion = text(task.suggestion);
-    if (status === "working" || status === "review" || status === "done" || present(suggestion)) {
+    if (status === "working" || status === "review" || status === "done") {
       const running = status === "working";
       rows.runs.push({
         id: `RUN-LEG-${task.id}`, task_id: task.id, attempt: 1, status: running ? "running" : "succeeded",
@@ -213,11 +214,11 @@ export function commitLegacyImport(db, state, { origin = "", backupDirectory, cl
           r.decision_note, r.created_at, r.updated_at);
       }
       const insertTask = db.prepare(`INSERT INTO tasks (id, workspace_id, requirement_id, revision, status, provider, executor_type, assignee,
-        task_text, acceptance_json, file_scope_json, blocked_reason, legacy_requirement_title, legacy_requirement_module, created_at, updated_at)
-        VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+        task_text, result_note, acceptance_json, file_scope_json, blocked_reason, legacy_requirement_title, legacy_requirement_module, created_at, updated_at)
+        VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
       for (const t of rows.tasks) {
-        insertTask.run(t.id, WORKSPACE_ID, t.requirement_id, t.status, t.provider, t.executor_type, t.assignee, t.task_text, t.acceptance_json,
-          t.file_scope_json, t.blocked_reason, t.legacy_requirement_title, t.legacy_requirement_module, t.created_at, t.updated_at);
+        insertTask.run(t.id, WORKSPACE_ID, t.requirement_id, t.status, t.provider, t.executor_type, t.assignee, t.task_text, t.result_note,
+          t.acceptance_json, t.file_scope_json, t.blocked_reason, t.legacy_requirement_title, t.legacy_requirement_module, t.created_at, t.updated_at);
       }
       const insertRun = db.prepare(`INSERT INTO task_runs (id, task_id, snapshot_id, attempt, status, started_at, ended_at, result_summary,
         review_decision, reviewed_at, is_legacy) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 1)`);
