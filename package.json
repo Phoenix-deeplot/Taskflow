@@ -1,0 +1,12 @@
+{
+  "name": "chuhaila-requirements-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "dev": "node scripts/serve-local.mjs",
+    "start": "node scripts/serve-local.mjs",
+    "test": "node --test"
+  }
+}

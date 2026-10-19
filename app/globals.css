@@ -1,0 +1,32 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "../vendor/shadcn-tailwind-4.13.0.css";
+
+:root {
+  color-scheme: light;
+  --ink: #182433;
+  --muted: #738091;
+  --line: #e5e9ee;
+  --paper: #f5f7f9;
+  --navy: #17334c;
+  --blue: #356f9e;
+  --teal: #3a827a;
+  --warm: #cf9a55;
+}
+
+* { box-sizing: border-box; }
+html, body { min-height: 100%; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: Arial, "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+}
+button, input, textarea, select { font: inherit; }
+button { cursor: pointer; }
+::selection { background: #d6e8f5; }
+.scrollbar-thin { scrollbar-width: thin; }
+.dialog-backdrop { background: rgb(20 35 48 / 34%); backdrop-filter: blur(2px); }
+.soft-shadow { box-shadow: 0 16px 45px rgb(30 51 70 / 12%); }
+.focus-ring:focus-visible { outline: 3px solid rgb(53 111 158 / 28%); outline-offset: 2px; }
