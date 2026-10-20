@@ -21,7 +21,7 @@ function quoteWindowsArg(value) {
 }
 function powershellScript(payload) {
   const data = Buffer.from(JSON.stringify(payload)).toString("base64");
-  const inner = `$ErrorActionPreference='Stop'; $d=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('INNER_DATA_PLACEHOLDER'))|ConvertFrom-Json; $psi=New-Object System.Diagnostics.ProcessStartInfo; $psi.FileName=$d.exe; $psi.WorkingDirectory=$d.workspace; $psi.Arguments=$d.args; $psi.UseShellExecute=$false; $psi.CreateNoWindow=$true; $psi.RedirectStandardInput=$true; $psi.RedirectStandardOutput=$true; $psi.RedirectStandardError=$true; $p=New-Object System.Diagnostics.Process; $p.StartInfo=$psi; [void]$p.Start(); $outFile=[IO.File]::Open($d.stdout,[IO.FileMode]::Create,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite); $errFile=[IO.File]::Open($d.stderr,[IO.FileMode]::Create,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite); $outTask=$p.StandardOutput.BaseStream.CopyToAsync($outFile); $errTask=$p.StandardError.BaseStream.CopyToAsync($errFile); $p.StandardInput.Write([IO.File]::ReadAllText($d.prompt)); $p.StandardInput.Close(); $p.WaitForExit(); $outTask.Wait(); $errTask.Wait(); $outFile.Dispose(); $errFile.Dispose(); [IO.File]::WriteAllText($d.exit,[string]$p.ExitCode)`;
+  const inner = `$ErrorActionPreference='Stop'; $d=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('INNER_DATA_PLACEHOLDER'))|ConvertFrom-Json; $psi=New-Object System.Diagnostics.ProcessStartInfo; $psi.FileName=$d.exe; $psi.WorkingDirectory=$d.workspace; $psi.Arguments=$d.args; $psi.UseShellExecute=$false; $psi.CreateNoWindow=$true; $psi.RedirectStandardInput=$true; $psi.RedirectStandardOutput=$true; $psi.RedirectStandardError=$true; $p=New-Object System.Diagnostics.Process; $p.StartInfo=$psi; [void]$p.Start(); $outFile=[IO.File]::Open($d.stdout,[IO.FileMode]::Create,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite); $errFile=[IO.File]::Open($d.stderr,[IO.FileMode]::Create,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite); $outTask=$p.StandardOutput.BaseStream.CopyToAsync($outFile); $errTask=$p.StandardError.BaseStream.CopyToAsync($errFile); $promptBytes=[IO.File]::ReadAllBytes($d.prompt); $p.StandardInput.BaseStream.Write($promptBytes,0,$promptBytes.Length); $p.StandardInput.BaseStream.Flush(); $p.StandardInput.Close(); $p.WaitForExit(); $outTask.Wait(); $errTask.Wait(); $outFile.Dispose(); $errFile.Dispose(); [IO.File]::WriteAllText($d.exit,[string]$p.ExitCode)`;
   const innerTemplate = encodePowerShell(inner);
   return `$ErrorActionPreference='Stop'; $pkg=Get-AppxPackage | Where-Object { $_.PackageFamilyName -eq '${FAMILY}' } | Sort-Object Version -Descending | Select-Object -First 1; if(!$pkg){throw 'Codex Store package not found'}; $exe=Join-Path $pkg.InstallLocation 'app\\resources\\codex.exe'; if(!(Test-Path -LiteralPath $exe)){throw 'Codex app executable not found in current package'}; $d=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${data}'))|ConvertFrom-Json; $d.exe=$exe; $innerData=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($d|ConvertTo-Json -Compress))); $innerSource=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${innerTemplate}')).Replace('INNER_DATA_PLACEHOLDER',$innerData); $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($innerSource)); $launcher=Join-Path $env:WINDIR 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'; Invoke-CommandInDesktopPackage -PackageFamilyName $pkg.PackageFamilyName -AppId 'App' -Command $launcher -Args ('-NoProfile -NonInteractive -EncodedCommand '+$encoded) -PreventBreakaway | Out-Null`;
 }
@@ -60,7 +60,8 @@ export function createCodexStoreAdapter({ pollMs = 500 } = {}) {
       await writeFile(paths.prompt, promptText, "utf8");
       await Promise.all([paths.exit, paths.result, paths.stdout, paths.stderr].map((target) => rm(target, { force: true })));
       await onEvent({ type: "progress", message: "正在通过 Windows Appx 身份启动 Codex", data: { step: "启动 Codex", pct: 3 } });
-      const args = ["exec", "--cd", workspace, "--sandbox", sandbox, "--ask-for-approval", "on-request", "--output-last-message", paths.result, "-"].map(quoteWindowsArg).join(" ");
+      // Same arguments as the CLI adapter (`codex exec` has no approval flag; see codexExecArgs in agent-adapters.mjs).
+      const args = ["exec", "--cd", workspace, "--sandbox", sandbox, "--ephemeral", "--output-last-message", paths.result, "-"].map(quoteWindowsArg).join(" ");
       const payload = { workspace, args, exe: "", ...paths };
       await runPowerShell(powershellScript(payload), { signal });
       let lastStdout = 0;
@@ -100,13 +101,23 @@ export function createCodexStoreAdapter({ pollMs = 500 } = {}) {
   };
 }
 
+/**
+ * PowerShell that finds the newest Codex store package and checks its codex.exe. Backslashes are doubled on
+ * purpose: inside a JavaScript template literal a single `\r` is a carriage return, which used to turn the
+ * path into nonsense so the store version was never found.
+ */
+export function detectScript(family = FAMILY) {
+  return `$ErrorActionPreference='Stop'; $p=Get-AppxPackage | Where-Object { $_.PackageFamilyName -eq '${family}' } | Sort-Object Version -Descending | Select-Object -First 1; if(!$p){exit 3}; $e=Join-Path $p.InstallLocation 'app\\resources\\codex.exe'; if(!(Test-Path -LiteralPath $e)){exit 4}; Write-Output ($p.Version.ToString())`;
+}
+
 export async function detectCodexStore({ command = PS } = {}) {
   if (process.platform !== "win32") return { available: false, installed: false, reason: "非 Windows 环境" };
   return new Promise((resolve) => {
-    const script = `$ErrorActionPreference='Stop'; $p=Get-AppxPackage | Where-Object { $_.PackageFamilyName -eq '${FAMILY}' } | Sort-Object Version -Descending | Select-Object -First 1; if(!$p){exit 3}; $e=Join-Path $p.InstallLocation 'app\resources\codex.exe'; if(!(Test-Path -LiteralPath $e)){exit 4}; Write-Output ($p.Version.ToString())`;
+    const script = detectScript();
     const child = spawn(command, ["-NoProfile", "-NonInteractive", "-Command", script], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     let output = ""; let errorText = "";
-    const timer = setTimeout(() => { child.kill(); resolve({ available: false, installed: false, reason: "Appx 检测超时" }); }, 4000);
+    // The first Get-AppxPackage after boot can take several seconds.
+    const timer = setTimeout(() => { child.kill(); resolve({ available: false, installed: false, reason: "Appx 检测超时" }); }, 20000);
     child.stdout.on("data", (chunk) => { output += chunk.toString(); });
     child.stderr.on("data", (chunk) => { errorText += chunk.toString(); });
     child.once("error", (error) => { clearTimeout(timer); resolve({ available: false, installed: false, reason: error.message }); });

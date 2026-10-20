@@ -55,8 +55,16 @@
     cachedAgentsAt = Date.now();
     return agentStatusHtml(cachedAgents);
   }
+  // One agent: "可用", "已安装，未登录（怎么办）", or "未检测到（原因）" — never a bare "未检测到" for something that is installed.
+  function oneAgentHtml(label, agent) {
+    if (!agent) return `<span class="agent-status no">${label}：检测失败</span>`;
+    const version = agent.version ? ` · ${esc(agent.version)}` : "";
+    if (agent.available) return `<span class="agent-status ok">${label}：可用${version}${agent.mode ? `（${esc(agent.mode)}）` : ""}</span>`;
+    if (agent.installed) return `<span class="agent-status no" title="${esc(agent.reason || "")}">${label}：已安装，未登录${version}<small> — ${esc(agent.reason || "请先登录")}</small></span>`;
+    return `<span class="agent-status no" title="${esc(agent.reason || "")}">${label}：未检测到${agent.reason ? `<small> — ${esc(agent.reason)}</small>` : ""}</span>`;
+  }
   function agentStatusHtml(result) {
-    return `<span class="agent-status ${result.claude?.available ? "ok" : "no"}">Claude Code：${result.claude?.available ? "可用" : "未检测到"}${result.claude?.version ? ` · ${esc(result.claude.version)}` : ""}</span><span class="agent-status ${result.codex?.available ? "ok" : "no"}">Codex：${result.codex?.available ? "可用" : "未检测到"}${result.codex?.version ? ` · ${esc(result.codex.version)}` : ""}</span><button class="btn small" data-redetect>重新检测</button>`;
+    return `${oneAgentHtml("Claude Code", result.claude)}${oneAgentHtml("Codex", result.codex)}<button class="btn small" data-redetect>重新检测</button>`;
   }
   async function loadTools(container) {
     const settings = await request("/api/settings");
@@ -105,23 +113,43 @@
     try {
       const result = await request("/api/analysis-template");
       textarea.value = result.template || "请分析这项需求的用户价值、复杂度、风险与验收方式。";
+      defaultAnalysisTemplate = textarea.value.trim();
     } catch (error) { textarea.value = `请分析这项需求的价值、实现复杂度、风险和验收方式。\n\n需求：${requirement?.title || ""}\n说明：${requirement?.description || ""}`; }
     $("[data-provider]", assignModal).value = "claude";
   }
   function $assignTitle() { return $("[data-assign-feature]", assignModal); }
   function closeAssign() { assignModal.classList.remove("open"); }
+  // What an execution task says when the person did not write their own instruction. (The box in the dialog starts
+  // with the analysis template, which says "do not modify any files" — wrong for a task that is meant to change code.)
+  const EXECUTION_TEMPLATE = [
+    "请在当前工作树中完成下面的需求。",
+    "改动保持最小，风格与现有代码一致；不要修改与需求无关的文件。",
+    "完成后运行项目已有的检查（如有），并说明：改了哪些文件、做了什么、哪些没有做、遇到的问题。",
+  ].join("\n");
+  let defaultAnalysisTemplate = "";
+  function requirementDetails(requirement) {
+    if (!requirement) return "";
+    return ["—— 需求 ——", `需求：${requirement.title}`, `模块：${requirement.module || "未分类"}`, `目标版本：${requirement.targetVersion}`, `当前决策：${requirement.decision}${requirement.decisionNote ? `（${requirement.decisionNote}）` : ""}`, `说明：${requirement.description || "暂无"}`].join("\n");
+  }
+  let assigning = false;
   async function performAssign(mode) {
+    if (assigning) return; // a double click must not create two tasks
     const requirementId = selectedRequirementId;
+    const requirement = api.state.items.find((item) => item.id === requirementId);
     const provider = $("[data-provider]", assignModal).value;
     const template = $("[data-template]", assignModal).value.trim();
     const assignee = $("[data-assignee]", assignModal).value.trim();
     if (!template) { api.toast("任务说明不能为空"); return; }
+    assigning = true;
+    assignModal.querySelectorAll("button[data-mode]").forEach((button) => { button.disabled = true; });
     try {
       let task;
       if (mode === "analyze") {
         task = await post(`/api/requirements/${encodeURIComponent(requirementId)}/analysis`, { template, provider, executorType: provider, assignee: assignee || provider });
       } else {
-        task = await request("/api/tasks", { method: "POST", body: JSON.stringify({ requirementId, provider, executorType: mode === "execute" ? provider : "manual_handoff", assignee, taskText: template, acceptance: ["说明实际完成内容、关键依据和未解决问题"] }) });
+        const instruction = !defaultAnalysisTemplate || template === defaultAnalysisTemplate ? EXECUTION_TEMPLATE : template;
+        const taskText = `${instruction}\n\n${requirementDetails(requirement)}`.trim();
+        task = await request("/api/tasks", { method: "POST", body: JSON.stringify({ requirementId, provider, executorType: mode === "execute" ? provider : "manual_handoff", assignee, taskText, acceptance: ["说明实际完成内容、关键依据和未解决问题"] }) });
       }
       closeAssign();
       if (mode !== "assign") {
@@ -135,6 +163,9 @@
     } catch (error) {
       await reload().catch(() => {});
       api.toast(`操作失败：${error.message}`);
+    } finally {
+      assigning = false;
+      assignModal.querySelectorAll("button[data-mode]").forEach((button) => { button.disabled = false; });
     }
   }
   async function dispatchSelected(taskIds, provider, mode = "selected") {
@@ -171,11 +202,32 @@
       else await reload();
     } catch (error) { content.textContent = `读取失败：${error.message}`; }
   }
+  function formatElapsed(totalSeconds) {
+    const s = Math.max(0, Math.floor(totalSeconds));
+    return s >= 3600 ? `${Math.floor(s / 3600)} 小时 ${Math.floor((s % 3600) / 60)} 分` : s >= 60 ? `${Math.floor(s / 60)} 分 ${s % 60} 秒` : `${s} 秒`;
+  }
+  const HEARTBEAT_TEXT = { ok: "正常", slow: "偏慢", lost: "失联", ended: "已结束" };
   function renderRunDetail(detail) {
     const content = $("[data-run-content]", runModal);
-    const progress = detail.progress ? `${detail.progress.pct ?? "—"}% · ${detail.progress.step || detail.progress.message || ""}` : "等待 Agent 进度事件";
-    const heartbeat = detail.heartbeat ? `${detail.heartbeat.state} · ${detail.heartbeat.ageSeconds ?? "—"} 秒前` : "尚未由 Runner 领取";
-    content.innerHTML = `<div><b>当前阶段：</b>${esc(detail.phase || detail.run?.status)}<br><b>进度：</b>${esc(progress)}<br><b>心跳：</b>${esc(heartbeat)}<br><b>状态：</b>${esc(detail.run?.status || "")}</div>${detail.error ? `<p style="color:#a45c57"><b>${esc(detail.error.code || "ERROR")}</b> · ${esc(detail.error.message || "")}</p>` : ""}<div class="run-actions">${(detail.artifacts || []).map((a) => `<span class="module-tag" title="${esc(a.uri)}">${esc(a.kind)} · ${esc(a.metadata?.fileName || a.id)}</span>`).join("")}</div><h4>事件时间线</h4><div class="run-timeline">${(detail.timeline || []).slice().reverse().map((entry) => `<div>${esc(new Date(entry.at).toLocaleString())} · ${esc(entry.summary)}</div>`).join("") || "暂无事件"}</div><h4>最新日志（最多 8000 字）</h4><pre>${esc(detail.logTail || "暂无日志")}</pre><h4>执行尝试</h4><p>${(detail.attempts || []).map((attempt) => `#${attempt.attempt} ${attempt.status}`).map(esc).join("　") || "无"}</p>`;
+    const run = detail.run || {};
+    const began = Date.parse(run.claimedAt || run.startedAt || "");
+    const finished = run.endedAt ? Date.parse(run.endedAt) : Date.now();
+    const elapsed = Number.isFinite(began) ? formatElapsed((finished - began) / 1000) : "—";
+    const running = run.status === "running";
+    const progress = detail.progress ? `${detail.progress.pct ?? "—"}% · ${detail.progress.step || detail.progress.message || ""}` : "暂无进度事件";
+    const heartbeat = detail.heartbeat ? `${HEARTBEAT_TEXT[detail.heartbeat.state] || detail.heartbeat.state}（${detail.heartbeat.ageSeconds ?? "—"} 秒前）` : "尚未由 Runner 领取";
+    const quiet = running && detail.heartbeat?.state === "ok" && !detail.logTail
+      ? "Agent 还在工作：Codex / Claude 在思考和执行时不会持续输出内容，一个任务可能需要几分钟。只要“心跳”显示正常就没有卡住。" : "";
+    const workspace = detail.workspace || {};
+    const where = [
+      workspace.projectPath ? `项目：${esc(workspace.projectPath)}` : "",
+      workspace.access ? `权限：${workspace.access === "read-only" ? "只读（不会修改文件）" : "只在独立分支里修改"}` : "",
+      workspace.reportedBranch?.uri ? `分支：${esc(String(workspace.reportedBranch.uri).replace(/^git:/, ""))}` : "",
+      workspace.diff ? `改动：<span class="module-tag" title="${esc(workspace.diff.uri)}">diff · ${workspace.diff.sizeBytes} 字节</span>` : "",
+    ].filter(Boolean).join("　");
+    const result = run.resultSummary ? `<h4>结果摘要</h4><pre>${esc(String(run.resultSummary).slice(0, 1200))}${String(run.resultSummary).length > 1200 ? "\n…（完整内容在任务卡片的“AI 输出 / 处理结果”和产物里）" : ""}</pre>` : "";
+    const checks = (run.evidence || []).filter((e) => e.kind === "check").map((e) => `<span class="module-tag" style="${e.passed ? "" : "color:#a45c57"}">${esc(e.name)}：${e.passed ? "通过" : `缺少 ${esc((e.missing || []).join("、"))}`}</span>`).join(" ");
+    content.innerHTML = `<div><b>当前阶段：</b>${esc(detail.phase || run.status)}<br><b>已运行：</b>${esc(elapsed)}${run.endedAt ? "（已结束）" : ""}<br><b>进度：</b>${esc(progress)}<br><b>心跳：</b>${esc(heartbeat)}<br><b>状态：</b>${esc(run.status || "")}</div>${quiet ? `<p class="dim">${esc(quiet)}</p>` : ""}${where ? `<p class="dim">${where}</p>` : ""}${detail.error ? `<p style="color:#a45c57"><b>${esc(detail.error.code || "ERROR")}</b> · ${esc(detail.error.message || "")}</p>` : ""}${checks ? `<p>${checks}</p>` : ""}${result}<div class="run-actions">${(detail.artifacts || []).map((a) => `<span class="module-tag" title="${esc(a.uri)}">${esc(a.kind)} · ${esc(a.metadata?.fileName || a.id)}</span>`).join("")}</div><h4>事件时间线</h4><div class="run-timeline">${(detail.timeline || []).slice().reverse().map((entry) => `<div>${esc(new Date(entry.at).toLocaleString())} · ${esc(entry.summary)}</div>`).join("") || "暂无事件"}</div><h4>最新日志（最多 8000 字）</h4><pre>${esc(detail.logTail || "暂无日志")}</pre><h4>执行尝试</h4><p>${(detail.attempts || []).map((attempt) => `#${attempt.attempt} ${attempt.status}`).map(esc).join("　") || "无"}</p>`;
   }
   async function refreshRunDetail(runId) {
     if (!runId || !runModal.classList.contains("open")) return;
@@ -209,6 +261,16 @@
       actions.innerHTML = `<button class="btn primary small" data-execute-task="${esc(taskId)}">▶ 执行</button><button class="btn small" data-detail-task="${esc(taskId)}">运行详情</button>`;
       card.append(actions);
     }
+    // Every card gets a way to see what its run is doing, not only the queued ones: a task that is running, waiting for
+    // review or failed is exactly when you want the progress, the error and the log.
+    for (const card of panel.querySelectorAll(".board-card")) {
+      if (card.querySelector("[data-detail-task]")) continue;
+      const taskId = card.querySelector("[data-transition]")?.dataset.transition;
+      if (!taskId) continue;
+      const actions = document.createElement("div"); actions.className = "run-actions";
+      actions.innerHTML = `<button class="btn small" data-detail-task="${esc(taskId)}">运行详情</button>`;
+      card.append(actions);
+    }
     panel.querySelector("[data-dispatch-selected]").onclick = () => dispatchSelected([...panel.querySelectorAll("[data-select-run]:checked")].map((input) => input.dataset.selectRun), $("[data-provider-current]", panel).value);
     panel.querySelector("[data-dispatch-all]").onclick = () => dispatchSelected([], $("[data-provider-current]", panel).value, "all");
     panel.querySelector("[data-refresh-agents]").onclick = () => panel.querySelector("[data-agent-tools] [data-redetect]")?.click();
@@ -238,12 +300,28 @@
   runModal.addEventListener("click", (event) => { if (event.target === runModal) closeRun(); });
 
   // The board and AI-task views are re-rendered by the original page; add controls after each paint.
-  const observer = new MutationObserver(() => {
-    document.querySelectorAll("#rows [data-task]").forEach((button) => { button.textContent = "分配 AI"; button.title = "选择只分配、分配并分析或分配并执行"; });
+  // IMPORTANT: this callback changes the page, and the observer watches the page. Assigning textContent replaces the
+  // child nodes even when the text is identical, which is itself a change that fires the observer again — a loop that
+  // runs as microtasks and freezes the whole tab as soon as one requirement row exists. So: only write when the value
+  // really differs, and run later on a timer (a macrotask can never starve the page).
+  const ASSIGN_LABEL = "分配 AI";
+  const ASSIGN_TITLE = "选择只分配、分配并分析或分配并执行";
+  const NOTICE_TEXT = "通过本地 Runner 将任务交给 Claude Code 或 Codex；执行进度、日志和产物可在运行详情中查看。";
+  let decorateScheduled = false;
+  function scheduleDecorate() {
+    if (decorateScheduled) return;
+    decorateScheduled = true;
+    setTimeout(() => { decorateScheduled = false; decorateAgentUi(); }, 0);
+  }
+  function decorateAgentUi() {
+    document.querySelectorAll("#rows [data-task]").forEach((button) => {
+      if (button.textContent !== ASSIGN_LABEL) button.textContent = ASSIGN_LABEL;
+      if (button.title !== ASSIGN_TITLE) button.title = ASSIGN_TITLE;
+    });
     const model = $("#task-model");
     if (model && !model.querySelector('option[value="codex"]')) model.insertAdjacentHTML("beforeend", '<option value="codex">Codex</option>');
     const notice = $(".notice-line");
-    if (notice) notice.textContent = "通过本地 Runner 将任务交给 Claude Code 或 Codex；执行进度、日志和产物可在运行详情中查看。";
+    if (notice && notice.textContent !== NOTICE_TEXT) notice.textContent = NOTICE_TEXT;
     document.querySelectorAll(".task-card").forEach((card) => {
       const edit = card.querySelector("[data-task-edit]");
       if (!edit || card.querySelector("[data-run-history]")) return;
@@ -257,8 +335,24 @@
     document.querySelectorAll("[data-run-task]").forEach((button) => { if (button.dataset.realBound) return; button.dataset.realBound = "1"; button.addEventListener("click", (event) => { event.preventDefault(); event.stopImmediatePropagation(); const card = button.closest(".task-card"); executeTask(button.dataset.runTask, $("[data-provider-current]", card)?.value); }, true); });
     const aiPanel = $("#dynamic-panel");
     if (aiPanel?.querySelector(".ai-card-list")) addAIBatchControls(aiPanel);
-  });
+  }
+  const observer = new MutationObserver(scheduleDecorate);
   observer.observe(document.body, { childList: true, subtree: true });
+
+  // Keep the board honest: a run changes the server's state long after you clicked, so check a tiny endpoint every few
+  // seconds and reload only when the version moved. Never while a dialog is open or you are typing, and not in a hidden tab.
+  let pollingChanges = false;
+  async function pollForChanges() {
+    if (pollingChanges || document.hidden) return;
+    if (document.querySelector(".modal-bg.open, .overlay.open") || document.activeElement?.matches?.("input, textarea, select")) return;
+    pollingChanges = true;
+    try {
+      const { stateVersion } = await request("/api/version");
+      if (Number.isInteger(stateVersion) && stateVersion !== api.state.stateVersion) await reload();
+    } catch { /* the server may be restarting; the next tick tries again */ }
+    finally { pollingChanges = false; }
+  }
+  setInterval(pollForChanges, 3000);
   document.querySelectorAll("#rows [data-task]").forEach((button) => { button.textContent = "分配 AI"; button.title = "选择只分配、分配并分析或分配并执行"; });
   const model = $("#task-model");
   if (model && !model.querySelector('option[value="codex"]')) model.insertAdjacentHTML("beforeend", '<option value="codex">Codex</option>');

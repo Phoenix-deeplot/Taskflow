@@ -46,6 +46,11 @@ export function createApiHandler({ db, backupDirectory, databaseName = "requirem
         send(response, 200, { ok: true, storage: "sqlite-relational", database: databaseName });
         return true;
       }
+      // Tiny on purpose: the page polls this every few seconds and only reloads the whole state when it changes.
+      if (pathname === "/api/version" && method === "GET") {
+        send(response, 200, { stateVersion: workbench.stateVersion() });
+        return true;
+      }
       if (pathname === "/api/settings" && method === "GET") {
         send(response, 200, { projectPath: workbench.getSetting("project.path") || projectDirectory });
         return true;

@@ -64,7 +64,7 @@ npm run runner
 
 先确认页面中的 Agent 状态显示“可用”，再在“分配 AI”中选择“分配并执行”，或在执行看板选择多项后点击“执行所选 / 执行全部待执行”。可用性检查通过 `claude --version`、`codex --version` 和 Windows Codex 商店包检查完成。普通 Codex CLI 优先；若命令不在 PATH，Windows Runner 会动态查找 Codex 商店包并通过 Appx 身份启动。商店版的进度和结果使用 Runner 目录中的日志及完成标记文件。
 
-每项执行都在独立 `workbench/<Run-ID>` 分支和 Git worktree 中运行，起点是所选仓库当前 `HEAD`（不会复制原工作目录里的未提交更改）。Codex 使用 `workspace-write` 沙箱和 `on-request` 审批策略；Claude Code 只接受工作树内文件编辑，不启用跳过权限。分析任务分别使用 Codex `read-only` 沙箱或 Claude Code `plan` 模式。Runner 续租、上报进度/日志、结果、diff 和产物；运行详情自动刷新状态、时间线、心跳、错误、日志尾部和各次尝试。服务会回收超出租约的 Run 并将任务放回队列。含未提交更改的 worktree 会保留，避免误删 Agent 产物。
+每项执行都在独立分支和 Git worktree 中运行，起点是项目目录当前 `HEAD`（不会复制原工作目录里的未提交更改）。分支名取自服务分配的 `wb/<任务号>-a<第几次>`，不合法或被占用时回退为 `workbench/<Run-ID>-<随机>`。执行类任务结束后，改动会在该分支上提交（`workbench: <需求标题>`）并作为 `branch` 产物上报，随后删除 worktree；你在项目目录里用 `git diff main..<分支>` 查看、`git merge <分支>` 合入，Runner 永远不动你的主分支和工作目录。分析任务不改文件，不留分支。Codex 使用 `codex exec --sandbox workspace-write`（分析为 `read-only`），不带任何“全部放行”参数；Claude Code 执行用 `acceptEdits`、分析用 `plan` 模式，不启用跳过权限。Runner 续租、上报进度/日志、结果、diff 和产物；运行详情自动刷新状态、时间线、心跳、错误、日志尾部和各次尝试。服务会回收超出租约的 Run 并将任务放回队列。
 
 便携路径、临时目录和调试选项：
 

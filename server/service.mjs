@@ -405,7 +405,7 @@ export function createWorkbench(db, { clock = () => new Date().toISOString(), ac
     const task = requireTaskRow(taskId);
     const executorType = options.executorType ?? task.executor_type;
     if (!nonEmpty(executorType) || executorType === "manual_handoff") {
-      throw invalid("派发给 Runner 需要指定执行器类型（例如 codex_cli）；“manual_handoff”只能手动启动");
+      throw invalid("派发给 Runner 需要指定执行器类型（codex 或 claude）；“manual_handoff”只能手动启动");
     }
     return launchRun(taskId, { ...options, executorType }, "pending");
   }

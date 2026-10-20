@@ -23,18 +23,32 @@ function runCommand(command, args, { cwd } = {}) {
   });
 }
 
-async function createWorktree(repositoryPath, workspacePath, runId) {
-  const branchName = `workbench/${safeSegment(runId)}-${randomUUID().slice(0, 8)}`;
+/**
+ * Creates the isolated worktree on a new branch. The branch name comes from the workbench (`claim.workspace.branch`,
+ * stable per task and attempt, so you can find it by task number); if that name is unusable or taken, a unique
+ * fallback is used. Returns `{ branch, remove }`.
+ */
+async function createWorktree(repositoryPath, workspacePath, runId, preferredBranch) {
+  const fallback = `workbench/${safeSegment(runId)}-${randomUUID().slice(0, 8)}`;
   await mkdir(workspacePath, { recursive: true });
-  await runCommand("git", ["-C", repositoryPath, "worktree", "add", "-b", branchName, workspacePath, "HEAD"]);
-  return async () => {
-    // A dirty worktree is intentionally retained for recovery; never force-remove user work.
-    try {
-      await runCommand("git", ["-C", repositoryPath, "worktree", "remove", workspacePath]);
-      // Remove the new branch only if Git confirms it is fully merged (normally still at HEAD).
-      await runCommand("git", ["-C", repositoryPath, "branch", "-d", branchName]).catch(() => {});
-    }
-    catch (error) { console.warn(`Keeping non-clean Runner worktree ${workspacePath}: ${error.message}`); }
+  let branchName = preferredBranch || fallback;
+  try { await runCommand("git", ["-C", repositoryPath, "worktree", "add", "-b", branchName, workspacePath, "HEAD"]); }
+  catch (error) {
+    if (branchName === fallback) throw error;
+    branchName = fallback;
+    await runCommand("git", ["-C", repositoryPath, "worktree", "add", "-b", branchName, workspacePath, "HEAD"]);
+  }
+  return {
+    branch: branchName,
+    remove: async () => {
+      // A dirty worktree is intentionally retained for recovery; never force-remove user work.
+      try {
+        await runCommand("git", ["-C", repositoryPath, "worktree", "remove", workspacePath]);
+        // Remove the new branch only if Git confirms it is fully merged (nothing was committed on it).
+        await runCommand("git", ["-C", repositoryPath, "branch", "-d", branchName]).catch(() => {});
+      }
+      catch (error) { console.warn(`Keeping non-clean Runner worktree ${workspacePath}: ${error.message}`); }
+    },
   };
 }
 
@@ -61,7 +75,7 @@ export async function runClaimedRun({
   const artifactDirectory = path.resolve(runnerDirectory, "artifacts", runKey);
   const logPath = path.join(artifactDirectory, "runner.log");
   await mkdir(artifactDirectory, { recursive: true });
-  const removeWorktree = await createWorktree(repositoryPath, workspacePath, runId);
+  const { branch: branchName, remove: removeWorktree } = await createWorktree(repositoryPath, workspacePath, runId, claim.workspace?.branch);
   const controller = new AbortController();
   const stopWithParent = () => controller.abort(signal.reason || new Error("Runner process is stopping"));
   signal?.addEventListener("abort", stopWithParent, { once: true });
@@ -201,6 +215,20 @@ export async function runClaimedRun({
         checksum: createHash("sha256").update(diff).digest("hex"), sizeBytes: Buffer.byteLength(diff, "utf8"),
         metadata: { fileName: "changes.patch" },
       });
+      // Keep the work: commit it on the run's branch, so "merge this branch" is all it takes to adopt the change, and
+      // report the branch so the run detail can name it. Read-only (analysis) runs never reach here with a diff.
+      if (claim.task.kind !== "analysis") {
+        try {
+          const subject = (claim.task.taskText || "").split(/\r?\n/).find((line) => line.startsWith("需求："))?.slice(3).trim() || claim.task.id;
+          await runCommand("git", ["-C", workspacePath, "add", "-A"]);
+          await runCommand("git", ["-C", workspacePath, "-c", "user.name=Requirements Workbench", "-c", "user.email=workbench@localhost", "commit", "--no-verify", "-m", `workbench: ${subject}\n\nTask ${claim.task.id}, run ${runId}`]);
+          const commit = await runCommand("git", ["-C", workspacePath, "rev-parse", "HEAD"]);
+          const base = await runCommand("git", ["-C", workspacePath, "rev-parse", "HEAD~1"]);
+          await callApi(`/api/runs/${encodeURIComponent(runId)}/artifacts`, { kind: "branch", uri: `git:${branchName}`, checksum: commit, sizeBytes: 0, metadata: { base, commit } });
+        } catch (error) {
+          await onEvent({ type: "log", message: `改动没能提交到分支 ${branchName}（diff 仍可用）：${error.message}` }).catch(() => {});
+        }
+      }
     }
     await callApi(`/api/runs/${encodeURIComponent(runId)}/result`, { summary: outcome?.summary || "Executor returned no summary", evidence: outcome?.evidence || [], idempotencyKey: `${runId}:result` });
   } catch (error) { callbackError = error; }

@@ -208,6 +208,18 @@ test("state compatibility API rejects completion without an execution result", a
   });
 });
 
+test("the version endpoint is tiny and moves whenever the workspace changes", async () => {
+  await withApi(async (base) => {
+    const first = await json(base, "/api/version");
+    assert.deepEqual(Object.keys(first.body), ["stateVersion"]);
+    assert.equal(first.body.stateVersion, 0);
+    await json(base, "/api/requirements", send("POST", { title: "变化" }));
+    const second = await json(base, "/api/version");
+    assert.ok(second.body.stateVersion > first.body.stateVersion);
+    assert.equal((await json(base, "/api/version")).body.stateVersion, second.body.stateVersion, "reading never moves it");
+  });
+});
+
 test("a newer local cache can replay completed work through legal server lifecycle steps", async () => {
   await withApi(async (base, db) => {
     const cached = {
