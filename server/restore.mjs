@@ -7,16 +7,20 @@ const ACTOR = "local-user";
 
 /** Export key -> table, in foreign-key order. */
 const TABLES = [
+  ["settings", "settings"],
   ["requirements", "requirements"],
+  ["splitDrafts", "split_drafts"],
   ["tasks", "tasks"],
   ["taskDependencies", "task_dependencies"],
   ["snapshots", "task_context_snapshots"],
   ["runs", "task_runs"],
+  ["artifacts", "artifacts"],
   ["events", "events"],
   ["migrationSources", "migration_sources"],
 ];
-const OPTIONAL_KEYS = new Set(["migrationSources"]);
-const BUSINESS_TABLES = ["requirements", "tasks", "task_runs", "task_context_snapshots", "events", "migration_sources"];
+// Sections added after the first v2 exports; older files simply do not have them.
+const OPTIONAL_KEYS = new Set(["migrationSources", "splitDrafts", "artifacts", "settings"]);
+const BUSINESS_TABLES = ["requirements", "split_drafts", "tasks", "task_runs", "artifacts", "task_context_snapshots", "events", "migration_sources"];
 
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 
@@ -49,7 +53,7 @@ export function previewRestore(db, doc) {
     rows.forEach((row, index) => {
       if (!isObject(row)) { problem(`${key}[${index}] 不是对象`); return; }
       for (const name of Object.keys(row)) if (!columns.has(name)) unknown += 1;
-      const primary = row.id;
+      const primary = table === "settings" ? row.key : row.id;
       if (table !== "task_dependencies") {
         if (primary === undefined || primary === null) { problem(`${key}[${index}] 缺少 id`); return; }
         if (seen.has(primary)) problem(`${key} 中 id 重复：${primary}`);
@@ -68,6 +72,8 @@ export function previewRestore(db, doc) {
       if (!has("tasks", dep.task_id) || !has("tasks", dep.depends_on_task_id)) problem(`依赖 ${dep.task_id} -> ${dep.depends_on_task_id} 引用了不存在的任务`);
     });
     doc.snapshots.forEach((s) => { if (!has("tasks", s.task_id)) problem(`快照 ${s.id} 引用了不存在的任务 ${s.task_id}`); });
+    (doc.splitDrafts ?? []).forEach((d) => { if (!has("requirements", d.requirement_id)) problem(`拆分草稿 ${d.id} 引用了不存在的需求 ${d.requirement_id}`); });
+    (doc.artifacts ?? []).forEach((a) => { if (!has("runs", a.run_id)) problem(`产物 ${a.id} 引用了不存在的运行 ${a.run_id}`); });
     doc.runs.forEach((run) => {
       if (!has("tasks", run.task_id)) problem(`运行 ${run.id} 引用了不存在的任务 ${run.task_id}`);
       if (run.snapshot_id && !has("snapshots", run.snapshot_id)) problem(`运行 ${run.id} 引用了不存在的快照 ${run.snapshot_id}`);

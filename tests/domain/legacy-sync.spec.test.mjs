@@ -104,3 +104,26 @@ test("re-adding a deleted requirement id (e.g. importing a backup) revives it in
   assert.deepEqual(active(s), ["REQ-AAAAA", "REQ-BBBBB"]);
   assert.equal(s.wb.getRequirement("REQ-BBBBB").title, "二（从备份导入）");
 });
+
+test("legacy status edits cannot invent reasons when returning tasks to queued", () => {
+  for (const targetBeforeReturn of ["working", "review", "done"]) {
+    const s = fresh();
+    s.put({ items: [item("REQ-AAAAA", "一")], tasks: [{ id: "TASK-REASON", featureId: "REQ-AAAAA", status: "queued", task: "有原因的状态机" }], events: [] });
+    let current = s.get();
+    if (["working", "review", "done"].includes(targetBeforeReturn)) {
+      current.tasks[0].status = "working"; s.put(current);
+    }
+    if (["review", "done"].includes(targetBeforeReturn)) {
+      current = s.get(); current.tasks[0].status = "review"; current.tasks[0].suggestion = "执行结果"; s.put(current);
+    }
+    if (targetBeforeReturn === "done") {
+      current = s.get(); current.tasks[0].status = "done"; s.put(current);
+    }
+    current = s.get();
+    current.tasks[0].status = "queued";
+    current.tasks[0].suggestion = "";
+    current.tasks[0].blockedReason = "";
+    assert.throws(() => s.put(current), (error) => error?.code === "REASON_REQUIRED", targetBeforeReturn);
+    assert.equal(s.wb.getTask("TASK-REASON").status, targetBeforeReturn);
+  }
+});

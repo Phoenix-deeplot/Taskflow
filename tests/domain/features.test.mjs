@@ -12,28 +12,43 @@ const rejects = (fn, code) => assert.throws(fn, (error) => error.code === code, 
 
 test("a version-1 database is upgraded in place, keeps its data and is backed up first", () => {
   const { directory, cleanup } = tempDirectory();
+  const open = [];
   try {
     const file = path.join(directory, "requirements.sqlite");
     const old = new DatabaseSync(file);
     old.exec("PRAGMA foreign_keys = ON");
     old.exec(listMigrations().find((m) => m.version === 1).sql);
     old.exec("PRAGMA user_version = 1");
-    old.prepare(`INSERT INTO tasks (id, workspace_id, status, task_text, created_at, updated_at) VALUES ('TASK-OLD01', 'WS-LOCAL', 'queued', '旧任务', 'x', 'x')`).run();
+    old.prepare(`INSERT INTO tasks (id, workspace_id, status, task_text, created_at, updated_at) VALUES ('TASK-OLD01', 'WS-LOCAL', 'working', '旧任务', 'x', 'x')`).run();
+    // A run with a snapshot and a review decision, to prove the later task_runs rebuild keeps everything.
+    old.prepare(`INSERT INTO task_context_snapshots (id, task_id, workspace_revision, task_revision, schema_version, prompt_template_version, payload_json, prompt_text, payload_hash, created_at)
+                 VALUES ('SNAP-OLD01', 'TASK-OLD01', 1, 1, 1, 't', '{}', '指令', 'abc', 'x')`).run();
+    old.prepare(`INSERT INTO task_runs (id, task_id, snapshot_id, attempt, status, started_at, result_summary, evidence_json, review_decision, review_note, override_reason)
+                 VALUES ('RUN-OLD01', 'TASK-OLD01', 'SNAP-OLD01', 1, 'running', 'x', '旧结果', '[{"kind":"t"}]', NULL, '', '原因')`).run();
     old.close();
 
     const backups = path.join(directory, "backups");
     const db = openDatabase(file, { backupDirectory: backups });
-    assert.equal(schemaVersion(db), 2);
+    open.push(db);
+    assert.equal(schemaVersion(db), listMigrations().at(-1).version);
     const wb = createWorkbench(db, { clock: makeClock() });
     assert.equal(wb.getTask("TASK-OLD01").taskText, "旧任务");
     assert.equal(wb.getTask("TASK-OLD01").resultNote, "");
+    const [run] = wb.listRuns("TASK-OLD01");
+    assert.deepEqual([run.id, run.snapshotId, run.status, run.resultSummary, run.overrideReason, run.evidence], ["RUN-OLD01", "SNAP-OLD01", "running", "旧结果", "原因", [{ kind: "t" }]]);
+    assert.equal(run.claimedBy, "");
+    assert.equal(wb.getSnapshot("SNAP-OLD01").promptText, "指令");
+
     const [backup] = readdirSync(backups);
     assert.match(backup, /^pre-migration-v1-/);
     const copy = new DatabaseSync(path.join(backups, backup), { readOnly: true });
+    open.push(copy);
     assert.equal(copy.prepare("PRAGMA user_version").get().user_version, 1);
     assert.equal(copy.prepare("SELECT COUNT(*) AS n FROM tasks").get().n, 1);
-    copy.close(); db.close();
-  } finally { cleanup(); }
+  } finally {
+    for (const handle of open) handle.close();
+    cleanup();
+  }
 });
 
 test("opening an up-to-date database does not create another backup", () => {

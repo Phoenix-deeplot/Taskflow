@@ -128,15 +128,17 @@ function syncTaskStatus(workbench, before, after) {
   if (after.status === "queued" && before.status === "working") {
     const run = workbench.listRuns(before.id).slice().reverse().find((entry) => entry.status === "running");
     if (!run) throw conflict("任务没有运行中的 Run，不能报告失败并重试");
-    workbench.reportFailure(run.id, { message: after.blockedReason || after.suggestion || "用户将任务退回待执行" });
+    const reason = after.blockedReason || after.suggestion;
+    if (!reason.trim()) throw new WorkbenchError("REASON_REQUIRED", "退回待执行必须填写原因", 400);
+    workbench.reportFailure(run.id, { message: reason });
     return;
   }
   if (after.status === "queued" && before.status === "review") {
-    workbench.rejectTask(before.id, { note: after.blockedReason || after.suggestion || "验收退回，请补充修改意见", expectedRevision: before.revision });
+    workbench.rejectTask(before.id, { note: after.blockedReason || after.suggestion, expectedRevision: before.revision });
     return;
   }
   if (after.status === "queued" && before.status === "done") {
-    workbench.reopenTask(before.id, { reason: after.blockedReason || after.suggestion || "重新打开任务", expectedRevision: before.revision });
+    workbench.reopenTask(before.id, { reason: after.blockedReason || after.suggestion, expectedRevision: before.revision });
     return;
   }
   workbench.transitionTask(before.id, after.status, {

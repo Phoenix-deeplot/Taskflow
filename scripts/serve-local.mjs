@@ -4,6 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDatabase } from "../server/db.mjs";
 import { createApiHandler } from "../server/http-api.mjs";
+import { guardRequest } from "../server/http-guard.mjs";
+import { detectLocalAgents } from "../runner/agent-adapters.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const root = path.join(projectRoot, "dist");
@@ -11,7 +13,14 @@ const dataDirectory = path.resolve(process.env.WORKBENCH_DATA_DIR || path.join(p
 const databasePath = path.join(dataDirectory, "requirements.sqlite");
 const backupDirectory = path.join(dataDirectory, "backups");
 const db = openDatabase(databasePath, { backupDirectory });
-const handleApi = createApiHandler({ db, backupDirectory, databaseName: path.basename(databasePath) });
+const handleApi = createApiHandler({ db, backupDirectory, databaseName: path.basename(databasePath), projectDirectory: process.cwd(), detectAgents: detectLocalAgents });
+const leaseSweep = setInterval(() => {
+  try {
+    const expired = handleApi.expireLeases();
+    for (const run of expired) console.warn(`Runner lease expired: ${run.id} (${run.status})`);
+  } catch (error) { console.error("Could not expire Runner leases", error); }
+}, 1_000);
+leaseSweep.unref();
 const args = process.argv.slice(2);
 const portIndex = args.indexOf("--port");
 const port = Number(portIndex >= 0 ? args[portIndex + 1] : process.env.PORT || 4179);
@@ -26,6 +35,7 @@ const mimeTypes = {
 };
 
 const server = createServer(async (request, response) => {
+  if (guardRequest(request, response)) return;
   let pathname;
   try {
     pathname = decodeURIComponent(new URL(request.url || "/", "http://localhost").pathname);
@@ -68,6 +78,7 @@ server.listen(port, "127.0.0.1", () => {
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => server.close(() => {
+    clearInterval(leaseSweep);
     db.close();
     process.exit(0);
   }));

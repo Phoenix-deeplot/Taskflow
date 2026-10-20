@@ -51,6 +51,7 @@ next-env.d.ts
 /dist/*
 !/dist/index.html
 !/dist/enhancements.js
+!/dist/agent-control.js
 /data/
 /.wrangler/
 # Checkout-local execution profile and tool state; never publish them.

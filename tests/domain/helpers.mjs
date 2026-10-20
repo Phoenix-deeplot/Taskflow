@@ -14,6 +14,21 @@ export function makeClock(start = "2026-10-19T00:00:00.000Z") {
   };
 }
 
+/** A clock that stands still until told to move; needed for lease and expiry arithmetic. */
+export function makeManualClock(start = "2026-10-19T00:00:00.000Z") {
+  let t = Date.parse(start);
+  const clock = () => new Date(t).toISOString();
+  clock.advance = (seconds) => { t += seconds * 1000; };
+  return clock;
+}
+
+export function manualWorkbench() {
+  const clock = makeManualClock();
+  const db = openDatabase(":memory:");
+  const wb = createWorkbench(db, { clock });
+  return { db, wb, clock };
+}
+
 export function memoryWorkbench() {
   const db = openDatabase(":memory:");
   const wb = createWorkbench(db, { clock: makeClock() });

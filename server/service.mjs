@@ -1,5 +1,9 @@
 import { all, one, transaction } from "./db.mjs";
+import { checkAnalysisResult } from "./analysis.mjs";
+import { createBatchOps } from "./batch-ops.mjs";
+import { createRunnerOps } from "./runner-ops.mjs";
 import { buildSnapshot } from "./snapshot.mjs";
+import { createSplitOps } from "./split-ops.mjs";
 import {
   BLOCKER_CODES, DECISIONS, TASK_STATUSES, VERSIONS,
   findTransition, operationsFor,
@@ -26,7 +30,7 @@ export const toRequirement = (r) => r && ({
 export const toTask = (r) => r && ({
   id: r.id, requirementId: r.requirement_id, revision: r.revision, status: r.status,
   provider: r.provider, executorType: r.executor_type, assignee: r.assignee, taskText: r.task_text,
-  resultNote: r.result_note ?? "", acceptance: parseJson(r.acceptance_json, []), fileScope: parseJson(r.file_scope_json, []),
+  kind: r.kind ?? "execution", resultNote: r.result_note ?? "", acceptance: parseJson(r.acceptance_json, []), fileScope: parseJson(r.file_scope_json, []),
   blockedReason: r.blocked_reason, legacyRequirementTitle: r.legacy_requirement_title,
   legacyRequirementModule: r.legacy_requirement_module, createdAt: r.created_at, updatedAt: r.updated_at,
 });
@@ -36,6 +40,8 @@ export const toRun = (r) => r && ({
   resultSummary: r.result_summary, evidence: parseJson(r.evidence_json, []), errorCode: r.error_code,
   errorMessage: r.error_message, reviewDecision: r.review_decision, reviewNote: r.review_note,
   reviewedAt: r.reviewed_at, overrideReason: r.override_reason, isLegacy: r.is_legacy === 1,
+  claimedBy: r.claimed_by ?? "", claimedAt: r.claimed_at ?? null, leaseUntil: r.lease_until ?? null, heartbeatAt: r.heartbeat_at ?? null,
+  cancelRequested: Boolean(r.cancel_requested_at), cancelReason: r.cancel_reason ?? "",
 });
 export const toEvent = (r) => r && ({
   id: r.id, entityType: r.entity_type, entityId: r.entity_id, runId: r.run_id, eventType: r.event_type,
@@ -85,7 +91,8 @@ export function createWorkbench(db, { clock = () => new Date().toISOString(), ac
       throw conflict(`${label}已被修改（当前版本 ${row.revision}，你基于 ${expectedRevision}）`, { currentRevision: row.revision });
     }
   }
-  const runningRun = (taskId) => one(db, "SELECT * FROM task_runs WHERE task_id = ? AND status = 'running'", taskId);
+  /** The unfinished run of a task, whether it is waiting for a runner or already running. */
+  const activeRun = (taskId) => one(db, "SELECT * FROM task_runs WHERE task_id = ? AND status IN ('pending', 'running')", taskId);
 
   function setTaskStatus(task, status, blockedReason = "") {
     db.prepare("UPDATE tasks SET status = ?, blocked_reason = ?, revision = revision + 1, updated_at = ? WHERE id = ?")
@@ -189,6 +196,8 @@ export function createWorkbench(db, { clock = () => new Date().toISOString(), ac
   function createTask(input = {}) {
     if (!nonEmpty(input.taskText)) throw invalid("任务说明不能为空");
     if (input.resultNote !== undefined && typeof input.resultNote !== "string") throw invalid("备注必须是文本");
+    const kind = input.kind ?? "execution";
+    if (!["execution", "analysis"].includes(kind)) throw invalid(`无效的任务类型：${kind}（只能是 execution 或 analysis）`);
     const status = input.status ?? "queued";
     if (!["clarification", "queued"].includes(status)) throw invalid("新任务只能从“待澄清”或“待执行”开始");
     const acceptance = stringList(input.acceptance, "验收标准") ?? [];
@@ -205,9 +214,9 @@ export function createWorkbench(db, { clock = () => new Date().toISOString(), ac
       } else id = uniqueId("TASK", "tasks");
       const now = clock();
       db.prepare(`INSERT INTO tasks (id, workspace_id, requirement_id, revision, status, provider, executor_type, assignee, task_text,
-                  result_note, acceptance_json, file_scope_json, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+                  result_note, kind, acceptance_json, file_scope_json, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(id, workspaceId, input.requirementId ?? null, status, input.provider ?? "", input.executorType ?? "manual_handoff",
-          input.assignee ?? "", input.taskText.trim(), input.resultNote ?? "", JSON.stringify(acceptance), JSON.stringify(fileScope), now, now);
+          input.assignee ?? "", input.taskText.trim(), input.resultNote ?? "", kind, JSON.stringify(acceptance), JSON.stringify(fileScope), now, now);
       const created = toTask(requireTaskRow(id));
       emit("task", id, "task.created", { after: created });
       return created;
@@ -323,10 +332,18 @@ export function createWorkbench(db, { clock = () => new Date().toISOString(), ac
   }
 
   // ---------- runs and state transitions ----------
-  function startTask(taskId, { overrideReason = "", executorId = "", expectedRevision } = {}) {
+  /**
+   * Shared by startTask (hand-off: the run is `running` at once) and dispatchTask (the run is `pending` until a
+   * runner claims it). Same checks, same immutable snapshot, one transaction.
+   */
+  function launchRun(taskId, { overrideReason = "", executorId = "", expectedRevision, executorType } = {}, runStatus) {
     return tx(() => {
       const task = requireTaskRow(taskId);
       checkRevision(task, expectedRevision, "任务");
+      if (executorType && executorType !== task.executor_type) {
+        db.prepare("UPDATE tasks SET executor_type = ? WHERE id = ?").run(executorType, taskId);
+        task.executor_type = executorType;
+      }
       const readiness = readinessOf(task);
       const hard = readiness.blockers.filter((b) => !BLOCKER_CODES[b.code]?.overridable);
       if (hard.length) throw new WorkbenchError("NOT_READY", hard[0].message, 409, { blockers: readiness.blockers });
@@ -346,7 +363,7 @@ export function createWorkbench(db, { clock = () => new Date().toISOString(), ac
           decision: requirement.decision, decision_note: requirement.decision_note,
         },
         task: {
-          id: task.id, revision: task.revision, provider: task.provider, executor_type: task.executor_type, assignee: task.assignee,
+          id: task.id, revision: task.revision, kind: task.kind, provider: task.provider, executor_type: task.executor_type, assignee: task.assignee,
           task_text: task.task_text, acceptance: parseJson(task.acceptance_json, []), file_scope: parseJson(task.file_scope_json, []),
         },
         dependencies,
@@ -363,12 +380,12 @@ export function createWorkbench(db, { clock = () => new Date().toISOString(), ac
       const attempt = (one(db, "SELECT MAX(attempt) AS n FROM task_runs WHERE task_id = ?", taskId).n ?? 0) + 1;
       const runId = uniqueId("RUN", "task_runs");
       db.prepare(`INSERT INTO task_runs (id, task_id, snapshot_id, attempt, status, executor_type, executor_id, started_at, override_reason)
-                  VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?)`)
-        .run(runId, taskId, snapshotId, attempt, task.executor_type, executorId, now, overrideReason);
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(runId, taskId, snapshotId, attempt, runStatus, task.executor_type, executorId, now, overrideReason);
 
       setTaskStatus(task, "working");
       emit("task", taskId, "task.transition", { from: "queued", to: "working", overrideReason, snapshotId, attempt }, runId);
-      emit("run", runId, "run.started", { taskId, snapshotId, attempt, overrideReason }, runId);
+      emit("run", runId, runStatus === "pending" ? "run.dispatched" : "run.started", { taskId, snapshotId, attempt, overrideReason, executorType: task.executor_type }, runId);
       return {
         task: toTask(requireTaskRow(taskId)),
         run: toRun(requireRunRow(runId)),
@@ -377,36 +394,76 @@ export function createWorkbench(db, { clock = () => new Date().toISOString(), ac
     });
   }
 
-  function submitResult(runId, { summary, evidence = [], expectedTaskRevision } = {}) {
+  /** Hand-off start: a person copies the prompt to an agent. The run is `running` immediately. */
+  const startTask = (taskId, options = {}) => launchRun(taskId, { ...options, executorType: undefined }, "running");
+
+  /**
+   * Queues the task for a local runner. The run waits as `pending` until `claimRun`. The executor type
+   * (e.g. "codex_cli") decides which runners may take it; manual hand-off tasks cannot be dispatched.
+   */
+  function dispatchTask(taskId, options = {}) {
+    const task = requireTaskRow(taskId);
+    const executorType = options.executorType ?? task.executor_type;
+    if (!nonEmpty(executorType) || executorType === "manual_handoff") {
+      throw invalid("派发给 Runner 需要指定执行器类型（例如 codex_cli）；“manual_handoff”只能手动启动");
+    }
+    return launchRun(taskId, { ...options, executorType }, "pending");
+  }
+
+  /** Runner-owned runs must present their lease token; hand-off runs never do. `idempotencyKey` makes a retried call return the first answer. */
+  function submitResult(runId, { summary, evidence = [], expectedTaskRevision, leaseToken, idempotencyKey } = {}) {
     if (!nonEmpty(summary)) throw invalid("提交结果必须填写结果摘要");
     if (!Array.isArray(evidence) || evidence.some((item) => !item || typeof item !== "object")) throw invalid("证据必须是对象数组");
     return tx(() => {
       const run = requireRunRow(runId);
-      if (run.status !== "running") throw conflict(`运行 ${runId} 已结束（${run.status}），不能再提交结果`);
+      runnerKit.internal.requireToken(run, leaseToken);
+      const again = runnerKit.internal.replay(runId, idempotencyKey, "result");
+      if (again) return again;
+      if (run.status !== "running") {
+        if (run.claimed_by && ["worker_lost", "cancelled"].includes(run.status)) {
+          throw new WorkbenchError("LEASE_LOST", `运行 ${runId} 已${run.status === "cancelled" ? "取消" : "因租约过期被回收"}，结果不再接收`, 409, { runStatus: run.status });
+        }
+        throw conflict(`运行 ${runId} 的状态是 ${run.status}，不能再提交结果`);
+      }
       const task = requireTaskRow(run.task_id);
       checkRevision(task, expectedTaskRevision, "任务");
       if (task.status !== "working") throw conflict(`任务状态为 ${task.status}，不能提交结果`);
+      // An analysis answer is compared with the built-in format; the outcome is attached as evidence, never a blocker.
+      const check = task.kind === "analysis" ? checkAnalysisResult(summary, task.task_text) : null;
+      const finalEvidence = check ? [...evidence, { kind: "check", name: "分析格式", passed: check.passed, missing: check.missing }] : evidence;
       db.prepare("UPDATE task_runs SET status = 'succeeded', ended_at = ?, result_summary = ?, evidence_json = ? WHERE id = ?")
-        .run(clock(), summary.trim(), JSON.stringify(evidence), runId);
+        .run(clock(), summary.trim(), JSON.stringify(finalEvidence), runId);
       setTaskStatus(task, "review");
-      emit("run", runId, "run.succeeded", { taskId: task.id, evidenceCount: evidence.length }, runId);
+      emit("run", runId, "run.succeeded", { taskId: task.id, evidenceCount: finalEvidence.length, analysisCheck: check }, runId);
       emit("task", task.id, "task.transition", { from: "working", to: "review", attempt: run.attempt }, runId);
-      return { task: toTask(requireTaskRow(task.id)), run: toRun(requireRunRow(runId)) };
+      const result = { task: toTask(requireTaskRow(task.id)), run: toRun(requireRunRow(runId)) };
+      runnerKit.internal.remember(runId, idempotencyKey, "result", result);
+      return result;
     });
   }
 
-  function reportFailure(runId, { message, errorCode = "EXECUTION_FAILED" } = {}) {
+  function reportFailure(runId, { message, errorCode = "EXECUTION_FAILED", leaseToken, idempotencyKey } = {}) {
     if (!nonEmpty(message)) throw invalid("报告失败必须填写失败信息");
     return tx(() => {
       const run = requireRunRow(runId);
-      if (run.status !== "running") throw conflict(`运行 ${runId} 已结束（${run.status}）`);
+      runnerKit.internal.requireToken(run, leaseToken);
+      const again = runnerKit.internal.replay(runId, idempotencyKey, "failure");
+      if (again) return again;
+      if (run.status !== "running") {
+        if (run.claimed_by && ["worker_lost", "cancelled"].includes(run.status)) {
+          throw new WorkbenchError("LEASE_LOST", `运行 ${runId} 已${run.status === "cancelled" ? "取消" : "因租约过期被回收"}`, 409, { runStatus: run.status });
+        }
+        throw conflict(`运行 ${runId} 的状态是 ${run.status}`);
+      }
       const task = requireTaskRow(run.task_id);
       db.prepare("UPDATE task_runs SET status = 'failed', ended_at = ?, error_code = ?, error_message = ? WHERE id = ?")
         .run(clock(), errorCode, message.trim(), runId);
       setTaskStatus(task, "queued");
       emit("run", runId, "run.failed", { taskId: task.id, errorCode, message: message.trim() }, runId);
       emit("task", task.id, "task.transition", { from: "working", to: "queued", reason: message.trim(), attempt: run.attempt }, runId);
-      return { task: toTask(requireTaskRow(task.id)), run: toRun(requireRunRow(runId)) };
+      const result = { task: toTask(requireTaskRow(task.id)), run: toRun(requireRunRow(runId)) };
+      runnerKit.internal.remember(runId, idempotencyKey, "failure", result);
+      return result;
     });
   }
 
@@ -424,7 +481,7 @@ export function createWorkbench(db, { clock = () => new Date().toISOString(), ac
       if (rule.reason && !nonEmpty(reason)) throw new WorkbenchError("REASON_REQUIRED", `从“${task.status}”到“${target}”必须填写原因`, 400);
       let cancelledRunId = null;
       if (rule.cancelsRun) {
-        const run = runningRun(taskId);
+        const run = activeRun(taskId);
         if (run) {
           db.prepare("UPDATE task_runs SET status = 'cancelled', ended_at = ?, error_code = 'CANCELLED', error_message = ? WHERE id = ?")
             .run(clock(), reason.trim(), run.id);
@@ -619,11 +676,26 @@ export function createWorkbench(db, { clock = () => new Date().toISOString(), ac
       tasks: rows("tasks", "created_at, id"),
       taskDependencies: rows("task_dependencies", "task_id, depends_on_task_id"),
       snapshots: rows("task_context_snapshots", "created_at, id"),
-      runs: rows("task_runs", "started_at, id"),
+      // The lease token hash is a credential: it never leaves the database file.
+      runs: rows("task_runs", "started_at, id").map(({ lease_token_hash: _hidden, ...run }) => run),
+      artifacts: rows("artifacts", "created_at, id"),
+      splitDrafts: rows("split_drafts", "created_at, id"),
+      settings: rows("settings", "key"),
       events: rows("events", "id"),
       migrationSources: rows("migration_sources", "id"),
     };
   }
+
+  // Runner leases and split drafts live in their own files; they share this toolbox.
+  const kit = {
+    db, tx, emit, clock, workspaceId, uniqueId, requireRequirementRow, requireTaskRow, requireRunRow, checkRevision,
+    setTaskStatus, toRun, toTask, getSnapshot, splitRequirement,
+  };
+  const runnerKit = createRunnerOps(kit);
+  const splitOps = createSplitOps(kit);
+  const batchOps = createBatchOps({
+    ...kit, toEvent, toRequirement, createTask, dispatchTask, listArtifacts: runnerKit.api.listArtifacts,
+  });
 
   return {
     workspaceId,
@@ -631,7 +703,8 @@ export function createWorkbench(db, { clock = () => new Date().toISOString(), ac
     createTask, updateTask, getTask, listTasks,
     addDependency, removeDependency, getReadiness, splitRequirement, requirementProgress,
     getContext, listContextVersions, appendContextVersion,
-    startTask, submitResult, reportFailure, transitionTask, acceptTask, rejectTask, reopenTask,
+    startTask, dispatchTask, submitResult, reportFailure, transitionTask, acceptTask, rejectTask, reopenTask,
+    ...runnerKit.api, ...splitOps, ...batchOps,
     listRuns, getSnapshot, listEvents, exportAll,
   };
 }
