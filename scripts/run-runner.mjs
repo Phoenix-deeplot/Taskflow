@@ -10,8 +10,9 @@ const runnerDirectory = path.resolve(process.env.WORKBENCH_RUNNER_DIR || path.jo
 const apiBase = process.env.WORKBENCH_RUNNER_API || "http://127.0.0.1:4179";
 const runnerId = process.env.WORKBENCH_RUNNER_ID || `local-${process.pid}`;
 const adapterName = process.env.WORKBENCH_RUNNER_ADAPTER || "auto";
-const adapter = adapterName === "fake" ? createFakeAdapter({ delayMs: Number(process.env.WORKBENCH_FAKE_DELAY_MS || 0) }) : (claim) => createAgentAdapter(claim.task?.executorType || claim.task?.provider);
-const capabilities = adapterName === "fake" ? ["fake"] : adapterName === "auto" ? ["claude", "claude-code", "codex"] : [adapterName];
+const adapter = adapterName === "fake" ? createFakeAdapter({ delayMs: Number(process.env.WORKBENCH_FAKE_DELAY_MS || 0) }) : (claim, launch) => createAgentAdapter(claim.run?.executorType || claim.task?.executorType || claim.task?.provider, launch);
+// "custom:*" = every agent the person added on the settings page (their definitions come with each claim).
+const capabilities = adapterName === "fake" ? ["fake"] : adapterName === "auto" ? ["claude", "claude-code", "codex", "custom:*"] : [adapterName];
 async function resolveRepositoryPath() {
   if (process.env.WORKBENCH_REPOSITORY) return fallbackRepositoryPath;
   try {

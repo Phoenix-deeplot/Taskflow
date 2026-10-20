@@ -10,13 +10,52 @@ const read = (name) => readFileSync(new URL(`../dist/${name}`, import.meta.url),
 const index = read("index.html");
 const enhancements = read("enhancements.js");
 const control = read("agent-control.js");
+const dialogs = read("dialogs.js");
+const settings = read("settings-panel.js");
 
 test("every page script parses (a syntax error blanks the page)", () => {
   const inline = [...index.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
   assert.ok(inline.length >= 1);
-  for (const [name, source] of [...inline.map((s, i) => [`index.html inline ${i}`, s]), ["enhancements.js", enhancements], ["agent-control.js", control]]) {
+  for (const [name, source] of [...inline.map((s, i) => [`index.html inline ${i}`, s]), ["enhancements.js", enhancements], ["agent-control.js", control], ["dialogs.js", dialogs], ["settings-panel.js", settings]]) {
     assert.doesNotThrow(() => new Function(source), name);
   }
+});
+
+test("every script the page needs is loaded, in an order that works", () => {
+  const order = [...index.matchAll(/<script src="\/([\w-]+\.js)"><\/script>/g)].map((m) => m[1]);
+  assert.deepEqual(order, ["dialogs.js", "enhancements.js", "agent-control.js", "settings-panel.js"]);
+});
+
+test("the page never uses the browser's own dialogs (they block everything when the browser does not show them)", () => {
+  const withoutBlockComments = (source) => source.replace(/\/\*[\s\S]*?\*\//g, "");
+  for (const [name, source] of [["index.html", index], ["enhancements.js", enhancements], ["agent-control.js", control], ["settings-panel.js", settings]]) {
+    assert.doesNotMatch(withoutBlockComments(source), /(?<![.\w])(?:window\.)?(?:confirm|prompt|alert)\(/, `${name} calls a native dialog`);
+  }
+  for (const method of ["confirm", "prompt", "alert", "copyText"]) assert.match(dialogs, new RegExp(`\\b${method}\\(`));
+});
+
+test("a task can be stopped from the board, the AI list and the run detail", () => {
+  assert.match(control, /data-stop-run/);
+  assert.match(control, /\/api\/runs\/\$\{encodeURIComponent\(runId\)\}\/cancel/);
+  assert.match(control, /const stopButtonHtml = /);
+  assert.match(control, /已请求终止/, "the run detail says a stop is under way");
+});
+
+test("a requirement can really be deleted, one at a time or several, and 'delete' as a decision is not mistaken for it", () => {
+  assert.match(control, /data-delete-req/);
+  assert.match(control, /id = "delete-selected"/);
+  assert.match(control, /method: "DELETE"/);
+  assert.match(index, /delete:\["不做","delete"\]/);
+  assert.doesNotMatch(index, /<option value="delete">删除<\/option>/);
+});
+
+test("the settings page keeps secrets out of storage, URLs and logs", () => {
+  assert.doesNotMatch(settings, /localStorage|sessionStorage|indexedDB|document\.cookie/);
+  assert.doesNotMatch(settings, /console\.(log|info|debug)/);
+  assert.doesNotMatch(settings, /URLSearchParams|location\.(search|hash)|\?\w+=\$\{/, "a key must never ride in a URL");
+  assert.match(settings, /type="password"[^>]*autocomplete="new-password"/);
+  assert.match(settings, /input\.value = "";/, "a secret field is emptied once saved");
+  assert.match(settings, /method, path|send\("PUT"/, "keys are sent in a request body");
 });
 
 test("the observer that decorates the page cannot trigger itself in a microtask loop", () => {

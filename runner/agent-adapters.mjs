@@ -42,6 +42,29 @@ export function resolveExecutable(command, { platform = process.platform, env = 
   return { command, prefixArgs: [] }; // let spawn report ENOENT
 }
 
+/** Stops a program and everything it started. `child.kill()` alone leaves a Windows agent's helper processes running. */
+export function killProcessTree(child, { platform = process.platform, spawnImpl = spawn } = {}) {
+  if (platform === "win32" && child.pid) {
+    try { spawnImpl("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }).once("error", () => child.kill()); return; }
+    catch { /* fall through */ }
+  }
+  child.kill("SIGTERM");
+}
+
+/** Is there a program with this name (or path) to run? Used to tell the person that a custom agent's command is wrong. */
+export function commandExists(command, { platform = process.platform, env = process.env, exists = existsSync } = {}) {
+  const windows = platform === "win32";
+  const join = windows ? path.win32.join : path.posix.join;
+  const extensions = windows && !/\.[a-z0-9]{2,4}$/i.test(command) ? [".exe", ".cmd", ".bat"].map((ext) => command + ext) : [command];
+  if (/[\\/]/.test(command)) return extensions.some((candidate) => exists(candidate));
+  const directories = String(env.PATH || env.Path || "").split(windows ? ";" : ":").filter(Boolean);
+  return directories.some((directory) => extensions.some((name) => exists(join(directory, name))));
+}
+
+export async function detectCustomAgent(agent, options) {
+  return commandExists(agent.command, options) ? { available: true, reason: null } : { available: false, reason: `找不到命令：${agent.command}` };
+}
+
 function execute(command, args, { cwd, signal, onChunk, env = process.env, input = "" } = {}) {
   const target = resolveExecutable(command, { env });
   return new Promise((resolve, reject) => {
@@ -50,7 +73,7 @@ function execute(command, args, { cwd, signal, onChunk, env = process.env, input
     let stderr = "";
     child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; onChunk?.("stdout", chunk); });
     child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; onChunk?.("stderr", chunk); });
-    const abort = () => child.kill("SIGTERM");
+    const abort = () => killProcessTree(child);
     if (signal?.aborted) abort();
     else signal?.addEventListener("abort", abort, { once: true });
     if (input) child.stdin.end(input, "utf8");
@@ -70,7 +93,7 @@ function promptFor({ task, snapshot }) {
   return prompt;
 }
 
-function createLocalCliAdapter({ name, command, argsFor, parseOutput, inputFor }) {
+function createLocalCliAdapter({ name, command, argsFor, parseOutput, inputFor, env, needsPromptFile = false }) {
   return {
     name,
     async execute({ run, task, snapshot, workspace, artifactDirectory = workspace, signal, onEvent }) {
@@ -79,12 +102,16 @@ function createLocalCliAdapter({ name, command, argsFor, parseOutput, inputFor }
       await mkdir(outputDirectory, { recursive: true });
       const resultPath = path.join(outputDirectory, `${run.id}.result.txt`);
       const logPath = path.join(outputDirectory, `${run.id}.cli.log`);
+      const promptFile = path.join(outputDirectory, `${run.id}.prompt.txt`);
+      if (needsPromptFile) await writeFile(promptFile, prompt, "utf8");
       await onEvent({ type: "progress", message: `${name} 正在启动`, data: { step: "启动 Agent", pct: 3 } });
       let pending = "";
       let lastFlush = Date.now();
-      const { stdout, stderr } = await execute(command, argsFor({ prompt, workspace, resultPath, task }), {
+      const { stdout, stderr } = await execute(command, argsFor({ prompt, workspace, resultPath, promptFile, task }), {
         cwd: workspace,
         signal,
+        // Credentials set on the settings page reach only this program, on top of the Runner's own environment.
+        env: env && Object.keys(env).length ? { ...process.env, ...env } : process.env,
         input: inputFor?.({ prompt }) || "",
         onChunk: async (stream, chunk) => {
           pending += chunk;
@@ -111,10 +138,11 @@ function createLocalCliAdapter({ name, command, argsFor, parseOutput, inputFor }
   };
 }
 
-export function createClaudeCodeAdapter({ command = process.env.CLAUDE_CLI || "claude" } = {}) {
+export function createClaudeCodeAdapter({ command = process.env.CLAUDE_CLI || "claude", env } = {}) {
   return createLocalCliAdapter({
     name: "claude",
     command,
+    env,
     // The prompt goes in on stdin: no command-line length limit and no quoting problems with multi-line or Chinese text.
     argsFor: ({ task }) => ["-p", "--permission-mode", task.kind === "analysis" ? "plan" : "acceptEdits", "--output-format", "text", "--append-system-prompt", "仅在当前独立工作树中完成任务。遵循任务自身的验收要求；不得访问或修改工作树之外的文件，不要自动批准高风险命令。"],
     inputFor: ({ prompt }) => prompt,
@@ -147,8 +175,37 @@ export function createCodexCliAdapter({ command = process.env.CODEX_CLI || "code
   });
 }
 
-export async function createAgentAdapter(provider) {
-  if (provider === "claude" || provider === "claude-code") return createClaudeCodeAdapter();
+/**
+ * An agent the person added on the settings page. The prompt goes in on stdin, unless an argument says otherwise:
+ * `{prompt}` is replaced by the text itself, `{promptFile}` by the path of a file holding it, `{workspace}` by the
+ * working directory. What the program prints is the result.
+ */
+export function createCustomAgentAdapter(definition, { env } = {}) {
+  const { id, name, command, args = [] } = definition;
+  const viaArgument = args.some((arg) => arg.includes("{prompt}"));
+  const viaFile = args.some((arg) => arg.includes("{promptFile}"));
+  const fill = (arg, values) => arg.replaceAll("{promptFile}", values.promptFile).replaceAll("{workspace}", values.workspace).replaceAll("{prompt}", values.prompt);
+  return createLocalCliAdapter({
+    name: name || id,
+    command,
+    env,
+    needsPromptFile: viaFile,
+    argsFor: (values) => args.map((arg) => fill(arg, values)),
+    inputFor: viaArgument || viaFile ? undefined : ({ prompt }) => prompt,
+    async parseOutput({ stdout, resultPath }) {
+      await writeFile(resultPath, stdout, "utf8");
+      return { summary: stdout.trim().slice(-6000) };
+    },
+  });
+}
+
+/** `launch` is what the server handed the Runner for this run: extra environment and, for a custom agent, its definition. */
+export async function createAgentAdapter(provider, launch = {}) {
+  if (provider === "claude" || provider === "claude-code") return createClaudeCodeAdapter({ env: launch.env });
+  if (String(provider).startsWith("custom:")) {
+    if (!launch.custom) throw new Error(`自定义 Agent“${String(provider).slice(7)}”的配置读不到（可能已在设置页删除）`);
+    return createCustomAgentAdapter(launch.custom, { env: launch.env });
+  }
   if (provider === "codex") {
     const command = process.env.CODEX_CLI || "codex";
     const status = await probeCommand(command);
@@ -205,7 +262,9 @@ export async function detectLocalAgents({ spawnImpl = spawn, home = os.homedir()
     probeCommand(process.env.CLAUDE_CLI || "claude", spawnImpl, { loginArgs: ["auth", "status"], parseLogin: parseClaudeLogin }),
     probeCommand(process.env.CODEX_CLI || "codex", spawnImpl, { loginArgs: ["login", "status"] }),
   ]);
-  if (claude.loggedIn === false) claude.reason = "已安装，但尚未登录：请在终端运行 claude，输入 /login 登录一次";
+  if (claude.loggedIn === false) {
+    claude.reason = "命令行里的 claude 还没登录（Claude 桌面应用的登录不能给命令行用）：点“登录 Claude Code”，或在设置里粘贴令牌";
+  }
   if (codexCli.installed) {
     if (codexCli.loggedIn === false) codexCli.reason = "已安装，但尚未登录：请在终端运行 codex login";
     return { claude, codex: codexCli };
@@ -220,4 +279,33 @@ export async function detectLocalAgents({ spawnImpl = spawn, home = os.homedir()
       reason: loggedIn ? null : "已安装，但尚未登录：请在 Codex 应用里登录",
     },
   };
+}
+
+// ---------- signing in to Claude Code from the settings page ----------
+
+let loginProcess = null;
+
+/**
+ * Starts "claude auth login", which opens the person's browser on Anthropic's sign-in page and finishes by itself once
+ * they approve. At most one at a time; it is stopped after `timeoutMs` if nobody completes it.
+ */
+export function startClaudeLogin({ spawnImpl = spawn, command = process.env.CLAUDE_CLI || "claude", timeoutMs = 10 * 60_000 } = {}) {
+  if (loginProcess && loginProcess.exitCode === null && !loginProcess.killed) {
+    return Promise.resolve({ started: false, running: true, message: "登录已经在进行：请在浏览器里完成授权，然后点“重新检测”" });
+  }
+  const target = resolveExecutable(command);
+  const child = spawnImpl(target.command, [...target.prefixArgs, "auth", "login", "--claudeai"], { stdio: "ignore", windowsHide: true });
+  loginProcess = child;
+  const timer = setTimeout(() => { if (child.exitCode === null) killProcessTree(child); }, timeoutMs);
+  timer.unref?.();
+  child.once("exit", () => { clearTimeout(timer); if (loginProcess === child) loginProcess = null; });
+  return new Promise((resolve, reject) => {
+    child.once("error", (error) => {
+      loginProcess = null;
+      const message = error.code === "ENOENT" ? "找不到 claude 命令，请先安装 Claude Code" : `无法启动登录：${error.message}`;
+      reject(Object.assign(new Error(message), { status: 400, code: "LOGIN_FAILED" }));
+    });
+    // An immediate failure (bad command) arrives within a tick or two; otherwise the browser is opening.
+    setTimeout(() => resolve({ started: true, message: "已打开浏览器登录页：请在浏览器里完成授权，然后回到这里点“重新检测”" }), 400);
+  });
 }

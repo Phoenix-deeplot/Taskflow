@@ -48,23 +48,57 @@
     await api.reloadDatabaseState?.();
   }
   function selectedProvider() { return $("[data-provider-current]")?.value || "claude"; }
-  function providerSelect() { return `<select data-provider-current aria-label="执行器"><option value="claude">Claude Code</option><option value="codex">Codex</option></select>`; }
+  // The two built-in agents plus whatever the person added on the settings page.
+  let customAgents = [];
+  const agentOptionsHtml = () => `<option value="claude">Claude Code</option><option value="codex">Codex</option>${customAgents.map((agent) => `<option value="${esc(agent.executorType)}">${esc(agent.name)}</option>`).join("")}`;
+  function providerSelect() { return `<select data-provider-current aria-label="执行器">${agentOptionsHtml()}</select>`; }
+  /** Brings every executor drop-down (board, AI view, assign dialog) up to date without losing what was chosen. */
+  function refreshAgentOptions() {
+    const known = new Set(["claude", "codex", ...customAgents.map((agent) => agent.executorType)]);
+    document.querySelectorAll("select[data-provider-current], select[data-provider]").forEach((select) => {
+      const manual = select.querySelector('option[value="manual_handoff"]');
+      const chosen = select.value;
+      select.innerHTML = agentOptionsHtml() + (manual ? '<option value="manual_handoff">手动交接</option>' : "");
+      select.value = known.has(chosen) || chosen === "manual_handoff" ? chosen : "claude";
+    });
+  }
   async function agentStatus(force = false) {
     if (!force && cachedAgents && Date.now() - cachedAgentsAt < 30_000) return agentStatusHtml(cachedAgents);
     cachedAgents = await request("/api/agents");
     cachedAgentsAt = Date.now();
+    customAgents = cachedAgents.custom || [];
+    refreshAgentOptions();
     return agentStatusHtml(cachedAgents);
   }
+  // The list of custom agents is cheap to read (no program is started); the pickers need it before detection finishes.
+  async function loadCustomAgents() {
+    try {
+      const config = await request("/api/agent-config");
+      customAgents = (config.customAgents || []).map((agent) => ({ ...agent, executorType: `custom:${agent.id}` }));
+      refreshAgentOptions();
+    } catch { /* an older server has no settings; the two built-in agents still work */ }
+  }
+  void loadCustomAgents();
+  // The settings page changed something (a key, a custom agent): forget the cached detection and refresh the pickers.
+  window.addEventListener("wb:agents-changed", () => {
+    cachedAgents = null;
+    void loadCustomAgents();
+    document.querySelectorAll("[data-agent-status]").forEach((box) => { agentStatus(true).then((html) => { box.innerHTML = html; }).catch(() => {}); });
+    agentStatus(true).catch(() => {});
+  });
   // One agent: "可用", "已安装，未登录（怎么办）", or "未检测到（原因）" — never a bare "未检测到" for something that is installed.
   function oneAgentHtml(label, agent) {
     if (!agent) return `<span class="agent-status no">${label}：检测失败</span>`;
     const version = agent.version ? ` · ${esc(agent.version)}` : "";
     if (agent.available) return `<span class="agent-status ok">${label}：可用${version}${agent.mode ? `（${esc(agent.mode)}）` : ""}</span>`;
-    if (agent.installed) return `<span class="agent-status no" title="${esc(agent.reason || "")}">${label}：已安装，未登录${version}<small> — ${esc(agent.reason || "请先登录")}</small></span>`;
+    if (agent.installed) return `<span class="agent-status no" title="${esc(agent.reason || "")}">${label}：已安装，未登录${version}<small> — ${esc(agent.reason || "请先登录")}（在“设置”里处理）</small></span>`;
     return `<span class="agent-status no" title="${esc(agent.reason || "")}">${label}：未检测到${agent.reason ? `<small> — ${esc(agent.reason)}</small>` : ""}</span>`;
   }
   function agentStatusHtml(result) {
-    return `${oneAgentHtml("Claude Code", result.claude)}${oneAgentHtml("Codex", result.codex)}<button class="btn small" data-redetect>重新检测</button>`;
+    const custom = (result.custom || []).map((agent) => (agent.available === false
+      ? `<span class="agent-status no" title="${esc(agent.reason || "")}">${esc(agent.name)}：不可用<small> — ${esc(agent.reason || "")}</small></span>`
+      : `<span class="agent-status ok">${esc(agent.name)}：已添加</span>`)).join("");
+    return `${oneAgentHtml("Claude Code", result.claude)}${oneAgentHtml("Codex", result.codex)}${custom}<button class="btn small" data-redetect>重新检测</button><button class="btn small" data-open-settings>设置</button>`;
   }
   async function loadTools(container) {
     const settings = await request("/api/settings");
@@ -185,6 +219,53 @@
       api.toast(`已派发任务，等待 Runner 领取（Run ${result.run?.id || "已创建"}）`);
     } catch (error) { api.toast(`派发失败：${error.message}`); }
   }
+  // ---------- stopping a run / deleting requirements ----------
+  /** The run that is waiting for a Runner or being executed, if the task has one. */
+  function activeRunOf(taskId) {
+    const task = api.state.tasks.find((entry) => entry.id === taskId);
+    if (!task || (task.status || "queued") !== "working") return null;
+    return (task.runs || []).slice().reverse().find((run) => ["pending", "running"].includes(run.status)) || null;
+  }
+  const stopButtonHtml = (taskId) => {
+    const run = activeRunOf(taskId);
+    return run ? `<button class="btn small danger" data-stop-run="${esc(run.id)}" title="停止这个任务的 AI">终止</button>` : "";
+  };
+  let stopping = false;
+  async function stopRun(runId) {
+    if (stopping) return;
+    const ok = await window.WBDialog.confirm("终止这次运行？\n\nAgent 会被立刻停止；这次还没提交的改动不会保留，任务回到“待执行”，之后可以重新执行。", { title: "终止 AI 任务", okText: "终止", danger: true });
+    if (!ok) return;
+    stopping = true;
+    try {
+      const result = await post(`/api/runs/${encodeURIComponent(runId)}/cancel`, { reason: "用户在页面终止" });
+      await reload();
+      api.toast(result.cancelled ? "已终止，任务回到待执行" : "已通知 Runner 停止这个 Agent，几秒内生效");
+      if (runModal.classList.contains("open")) void refreshRunDetail(runId);
+    } catch (error) {
+      api.toast(`终止失败：${error.message}`);
+    } finally { stopping = false; }
+  }
+  async function deleteRequirements(ids) {
+    if (!ids.length) { api.toast("先勾选要删除的需求"); return; }
+    await reload().catch(() => {}); // look at the tasks as they are now, not as the page last saw them
+    const items = ids.map((id) => api.state.items.find((item) => item.id === id)).filter(Boolean);
+    if (!items.length) return;
+    const tasks = api.state.tasks.filter((task) => ids.includes(task.featureId));
+    const active = tasks.filter((task) => task.status === "working").length;
+    const names = items.slice(0, 5).map((item) => `· ${item.title}`).join("\n") + (items.length > 5 ? `\n…等共 ${items.length} 条` : "");
+    const detail = tasks.length ? `\n\n它们名下的 ${tasks.length} 个任务会一并隐藏${active ? `，其中 ${active} 个正在执行的会被终止` : ""}。` : "";
+    const ok = await window.WBDialog.confirm(`删除 ${items.length} 条需求？\n\n${names}${detail}\n变更记录会保留。`, { title: "删除需求", okText: "删除", danger: true });
+    if (!ok) return;
+    let failed = 0;
+    for (const item of items) {
+      try { await request(`/api/requirements/${encodeURIComponent(item.id)}`, { method: "DELETE", body: JSON.stringify({ reason: "在页面删除" }) }); }
+      catch { failed += 1; }
+    }
+    $('.nav[data-view="requirements"]')?.click(); // clears the page's selection and redraws
+    await reload();
+    api.toast(failed ? `已删除 ${items.length - failed} 条，${failed} 条没有删除成功` : `已删除 ${items.length} 条需求${active ? "，正在执行的任务已通知停止" : ""}`);
+  }
+
   async function showRunDetail(taskId) {
     clearInterval(runRefreshTimer);
     const content = $("[data-run-content]", runModal);
@@ -218,6 +299,10 @@
     const heartbeat = detail.heartbeat ? `${HEARTBEAT_TEXT[detail.heartbeat.state] || detail.heartbeat.state}（${detail.heartbeat.ageSeconds ?? "—"} 秒前）` : "尚未由 Runner 领取";
     const quiet = running && detail.heartbeat?.state === "ok" && !detail.logTail
       ? "Agent 还在工作：Codex / Claude 在思考和执行时不会持续输出内容，一个任务可能需要几分钟。只要“心跳”显示正常就没有卡住。" : "";
+    const live = ["pending", "running"].includes(run.status);
+    const stop = live ? (run.cancelRequested
+      ? '<p class="dim">已请求终止，正在等 Runner 停下 Agent…</p>'
+      : `<div class="run-actions"><button class="btn danger small" data-stop-run="${esc(run.id)}">终止这次运行</button></div>`) : "";
     const workspace = detail.workspace || {};
     const where = [
       workspace.projectPath ? `项目：${esc(workspace.projectPath)}` : "",
@@ -227,7 +312,7 @@
     ].filter(Boolean).join("　");
     const result = run.resultSummary ? `<h4>结果摘要</h4><pre>${esc(String(run.resultSummary).slice(0, 1200))}${String(run.resultSummary).length > 1200 ? "\n…（完整内容在任务卡片的“AI 输出 / 处理结果”和产物里）" : ""}</pre>` : "";
     const checks = (run.evidence || []).filter((e) => e.kind === "check").map((e) => `<span class="module-tag" style="${e.passed ? "" : "color:#a45c57"}">${esc(e.name)}：${e.passed ? "通过" : `缺少 ${esc((e.missing || []).join("、"))}`}</span>`).join(" ");
-    content.innerHTML = `<div><b>当前阶段：</b>${esc(detail.phase || run.status)}<br><b>已运行：</b>${esc(elapsed)}${run.endedAt ? "（已结束）" : ""}<br><b>进度：</b>${esc(progress)}<br><b>心跳：</b>${esc(heartbeat)}<br><b>状态：</b>${esc(run.status || "")}</div>${quiet ? `<p class="dim">${esc(quiet)}</p>` : ""}${where ? `<p class="dim">${where}</p>` : ""}${detail.error ? `<p style="color:#a45c57"><b>${esc(detail.error.code || "ERROR")}</b> · ${esc(detail.error.message || "")}</p>` : ""}${checks ? `<p>${checks}</p>` : ""}${result}<div class="run-actions">${(detail.artifacts || []).map((a) => `<span class="module-tag" title="${esc(a.uri)}">${esc(a.kind)} · ${esc(a.metadata?.fileName || a.id)}</span>`).join("")}</div><h4>事件时间线</h4><div class="run-timeline">${(detail.timeline || []).slice().reverse().map((entry) => `<div>${esc(new Date(entry.at).toLocaleString())} · ${esc(entry.summary)}</div>`).join("") || "暂无事件"}</div><h4>最新日志（最多 8000 字）</h4><pre>${esc(detail.logTail || "暂无日志")}</pre><h4>执行尝试</h4><p>${(detail.attempts || []).map((attempt) => `#${attempt.attempt} ${attempt.status}`).map(esc).join("　") || "无"}</p>`;
+    content.innerHTML = `<div><b>当前阶段：</b>${esc(detail.phase || run.status)}<br><b>已运行：</b>${esc(elapsed)}${run.endedAt ? "（已结束）" : ""}<br><b>进度：</b>${esc(progress)}<br><b>心跳：</b>${esc(heartbeat)}<br><b>状态：</b>${esc(run.status || "")}</div>${stop}${quiet ?`<p class="dim">${esc(quiet)}</p>` : ""}${where ? `<p class="dim">${where}</p>` : ""}${detail.error ? `<p style="color:#a45c57"><b>${esc(detail.error.code || "ERROR")}</b> · ${esc(detail.error.message || "")}</p>` : ""}${checks ? `<p>${checks}</p>` : ""}${result}<div class="run-actions">${(detail.artifacts || []).map((a) => `<span class="module-tag" title="${esc(a.uri)}">${esc(a.kind)} · ${esc(a.metadata?.fileName || a.id)}</span>`).join("")}</div><h4>事件时间线</h4><div class="run-timeline">${(detail.timeline || []).slice().reverse().map((entry) => `<div>${esc(new Date(entry.at).toLocaleString())} · ${esc(entry.summary)}</div>`).join("") || "暂无事件"}</div><h4>最新日志（最多 8000 字）</h4><pre>${esc(detail.logTail || "暂无日志")}</pre><h4>执行尝试</h4><p>${(detail.attempts || []).map((attempt) => `#${attempt.attempt} ${attempt.status}`).map(esc).join("　") || "无"}</p>`;
   }
   async function refreshRunDetail(runId) {
     if (!runId || !runModal.classList.contains("open")) return;
@@ -268,7 +353,7 @@
       const taskId = card.querySelector("[data-transition]")?.dataset.transition;
       if (!taskId) continue;
       const actions = document.createElement("div"); actions.className = "run-actions";
-      actions.innerHTML = `<button class="btn small" data-detail-task="${esc(taskId)}">运行详情</button>`;
+      actions.innerHTML = `<button class="btn small" data-detail-task="${esc(taskId)}">运行详情</button>${stopButtonHtml(taskId)}`;
       card.append(actions);
     }
     panel.querySelector("[data-dispatch-selected]").onclick = () => dispatchSelected([...panel.querySelectorAll("[data-select-run]:checked")].map((input) => input.dataset.selectRun), $("[data-provider-current]", panel).value);
@@ -281,6 +366,15 @@
   };
 
   document.addEventListener("click", (event) => {
+    const stopButton = event.target.closest("[data-stop-run]");
+    if (stopButton) { event.preventDefault(); event.stopImmediatePropagation(); void stopRun(stopButton.dataset.stopRun); return; }
+    const deleteButton = event.target.closest("[data-delete-req]");
+    if (deleteButton) { event.preventDefault(); event.stopImmediatePropagation(); void deleteRequirements([deleteButton.dataset.deleteReq]); return; }
+    if (event.target.closest("#delete-selected")) {
+      event.preventDefault(); event.stopImmediatePropagation();
+      void deleteRequirements([...document.querySelectorAll("#rows .row-check:checked")].map((box) => box.dataset.id));
+      return;
+    }
     const rowAssign = event.target.closest("[data-task]");
     if (rowAssign && rowAssign.closest("#rows")) { event.preventDefault(); event.stopImmediatePropagation(); openAssign(rowAssign.dataset.task); return; }
     const runDetailButton = event.target.closest("[data-run-history]");
@@ -317,7 +411,22 @@
     document.querySelectorAll("#rows [data-task]").forEach((button) => {
       if (button.textContent !== ASSIGN_LABEL) button.textContent = ASSIGN_LABEL;
       if (button.title !== ASSIGN_TITLE) button.title = ASSIGN_TITLE;
+      // Every requirement can really be deleted from its own row.
+      const cell = button.parentElement;
+      if (cell && !cell.querySelector("[data-delete-req]")) {
+        const remove = document.createElement("button");
+        remove.type = "button"; remove.className = "btn small subtle danger"; remove.dataset.deleteReq = button.dataset.task;
+        remove.title = "删除这条需求（名下的任务一并隐藏，运行中的会被终止）"; remove.textContent = "删除";
+        button.after(remove);
+      }
     });
+    const bulk = $("#bulk");
+    if (bulk && !$("#delete-selected", bulk)) {
+      const remove = document.createElement("button");
+      remove.type = "button"; remove.className = "btn small danger"; remove.id = "delete-selected"; remove.textContent = "删除所选";
+      remove.title = "真正删除勾选的需求（“不做”只是一种决策，不会删除）";
+      bulk.append(remove);
+    }
     const model = $("#task-model");
     if (model && !model.querySelector('option[value="codex"]')) model.insertAdjacentHTML("beforeend", '<option value="codex">Codex</option>');
     const notice = $(".notice-line");
@@ -329,7 +438,9 @@
       const actions = card.querySelector(".task-right");
       if (actions) {
         const detail = document.createElement("button"); detail.type = "button"; detail.className = "btn small"; detail.dataset.runHistory = id; detail.textContent = "运行详情"; actions.append(detail);
-        const select = document.createElement("select"); select.className = "task-status"; select.dataset.providerCurrent = ""; select.innerHTML = '<option value="claude">Claude Code</option><option value="codex">Codex</option>'; actions.append(select);
+        const run = activeRunOf(id);
+        if (run) { const stop = document.createElement("button"); stop.type = "button"; stop.className = "btn small danger"; stop.dataset.stopRun = run.id; stop.title = "停止这个任务的 AI"; stop.textContent = "终止"; actions.append(stop); }
+        const select = document.createElement("select"); select.className = "task-status"; select.dataset.providerCurrent = ""; select.innerHTML = agentOptionsHtml(); actions.append(select);
       }
     });
     document.querySelectorAll("[data-run-task]").forEach((button) => { if (button.dataset.realBound) return; button.dataset.realBound = "1"; button.addEventListener("click", (event) => { event.preventDefault(); event.stopImmediatePropagation(); const card = button.closest(".task-card"); executeTask(button.dataset.runTask, $("[data-provider-current]", card)?.value); }, true); });
@@ -344,7 +455,7 @@
   let pollingChanges = false;
   async function pollForChanges() {
     if (pollingChanges || document.hidden) return;
-    if (document.querySelector(".modal-bg.open, .overlay.open") || document.activeElement?.matches?.("input, textarea, select")) return;
+    if (document.querySelector(".modal-bg.open, .overlay.open, .wbd-bg") || document.activeElement?.matches?.("input, textarea, select")) return;
     pollingChanges = true;
     try {
       const { stateVersion } = await request("/api/version");
@@ -353,6 +464,8 @@
     finally { pollingChanges = false; }
   }
   setInterval(pollForChanges, 3000);
+  // Polling pauses in a hidden tab, so catch up the moment the person comes back (before they edit something stale).
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) void pollForChanges(); });
   document.querySelectorAll("#rows [data-task]").forEach((button) => { button.textContent = "分配 AI"; button.title = "选择只分配、分配并分析或分配并执行"; });
   const model = $("#task-model");
   if (model && !model.querySelector('option[value="codex"]')) model.insertAdjacentHTML("beforeend", '<option value="codex">Codex</option>');

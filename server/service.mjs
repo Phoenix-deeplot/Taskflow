@@ -697,9 +697,23 @@ export function createWorkbench(db, { clock = () => new Date().toISOString(), ac
     ...kit, toEvent, toRequirement, createTask, dispatchTask, listArtifacts: runnerKit.api.listArtifacts,
   });
 
+  /**
+   * Deleting a requirement also stops its work: a run nobody has claimed yet is cancelled on the spot, a running one is
+   * asked to stop. (Otherwise a Runner would go on to execute — and spend tokens on — something that no longer exists.)
+   */
+  function removeRequirement(id, options = {}) {
+    return tx(() => {
+      const active = all(db, `SELECT r.id FROM task_runs r JOIN tasks t ON t.id = r.task_id
+                              WHERE t.requirement_id = ? AND r.status IN ('pending', 'running') ORDER BY r.rowid`, id);
+      const deleted = deleteRequirement(id, options);
+      for (const run of active) runnerKit.api.cancelRun(run.id, { reason: "需求已删除" });
+      return deleted;
+    });
+  }
+
   return {
     workspaceId,
-    createRequirement, updateRequirement, deleteRequirement, restoreRequirement, getRequirement, listRequirements, stateVersion,
+    createRequirement, updateRequirement, deleteRequirement: removeRequirement, restoreRequirement, getRequirement, listRequirements, stateVersion,
     createTask, updateTask, getTask, listTasks,
     addDependency, removeDependency, getReadiness, splitRequirement, requirementProgress,
     getContext, listContextVersions, appendContextVersion,

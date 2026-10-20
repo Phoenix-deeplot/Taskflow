@@ -99,7 +99,7 @@ test("settings, agent detection, analysis tasks, batch dispatch, and run detail 
     const invalidProject = await json(base, "/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectPath: "__missing_project_for_settings_test__" }) });
     assert.equal(invalidProject.status, 400);
     assert.equal((await json(base, "/api/analysis-template")).status, 200);
-    assert.deepEqual((await json(base, "/api/agents")).body, { claude: { available: true }, codex: { available: false } });
+    assert.deepEqual((await json(base, "/api/agents")).body, { claude: { available: true }, codex: { available: false }, custom: [] });
     assert.equal((await json(base, "/api/requirements/REQ-1/analysis", send("POST", { template: "only read" }))).body.id, "TASK-ANALYSIS");
     assert.equal((await json(base, "/api/tasks/dispatch", send("POST", { taskIds: ["T1", "T2"], executorType: "codex" }))).body.dispatched, 2);
     assert.equal((await json(base, "/api/tasks/dispatch-all", send("POST", { executorType: "claude" }))).body.dispatched, 1);

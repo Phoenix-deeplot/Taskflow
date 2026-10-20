@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 import { openDatabase } from "../server/db.mjs";
 import { createApiHandler } from "../server/http-api.mjs";
 import { guardRequest } from "../server/http-guard.mjs";
-import { detectLocalAgents } from "../runner/agent-adapters.mjs";
+import { createSecretStore } from "../server/agent-config.mjs";
+import { detectCustomAgent, detectLocalAgents, startClaudeLogin } from "../runner/agent-adapters.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const root = path.join(projectRoot, "dist");
@@ -13,7 +14,12 @@ const dataDirectory = path.resolve(process.env.WORKBENCH_DATA_DIR || path.join(p
 const databasePath = path.join(dataDirectory, "requirements.sqlite");
 const backupDirectory = path.join(dataDirectory, "backups");
 const db = openDatabase(databasePath, { backupDirectory });
-const handleApi = createApiHandler({ db, backupDirectory, databaseName: path.basename(databasePath), projectDirectory: process.cwd(), detectAgents: detectLocalAgents });
+// Keys typed on the settings page live in their own file beside the database, never inside it (so exports and backups cannot carry them).
+const secretStore = createSecretStore({ file: path.join(dataDirectory, "agent-secrets.json") });
+const handleApi = createApiHandler({
+  db, backupDirectory, databaseName: path.basename(databasePath), projectDirectory: process.cwd(),
+  detectAgents: detectLocalAgents, secretStore, detectCustomAgent, startClaudeLogin,
+});
 const leaseSweep = setInterval(() => {
   try {
     const expired = handleApi.expireLeases();

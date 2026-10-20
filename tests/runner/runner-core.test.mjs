@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +7,7 @@ import { createServer } from "node:http";
 import test from "node:test";
 import { promisify } from "node:util";
 import { createFakeAdapter } from "../../runner/fake-adapter.mjs";
-import { runClaimedRun } from "../../runner/runner-core.mjs";
+import { fetchLaunchConfig, runClaimedRun, runRunner } from "../../runner/runner-core.mjs";
 
 const execFileAsync = promisify(execFile);
 async function tempDirectory() {
@@ -159,6 +159,83 @@ test("an unusable or already-taken branch name falls back to a unique one instea
       assert.match(branch.uri, /^git:workbench\/RUN-X1-[0-9a-f]{8}$/, `preferred "${preferred}"`);
     } finally { await rm(directory, { recursive: true, force: true }); }
   }
+});
+
+test("a run the person stops leaves nothing behind: no worktree, no branch, no half-done edits", async () => {
+  const directory = await tempDirectory();
+  const { repo, git } = await demoRepository(directory);
+  let heartbeats = 0;
+  const api = await fakeApi(async ({ url }) => {
+    if (url.endsWith("/heartbeat")) { heartbeats += 1; return { body: { cancelRequested: heartbeats >= 2, leaseUntil: "later" } }; }
+    if (url.endsWith("/events")) return { status: 201, body: { inserted: true } };
+    if (url.endsWith("/ack-cancel")) return { body: { status: "cancelled" } };
+    throw new Error(`Unexpected Runner request ${url}`);
+  });
+  // The agent edits a file and has a helper process that keeps the folder open for a moment after the stop (as on Windows).
+  const holdingAdapter = {
+    name: "holder",
+    async execute({ workspace, signal }) {
+      await writeFile(path.join(workspace, "math.mjs"), "half done\n");
+      await writeFile(path.join(workspace, "new-file.txt"), "scratch\n");
+      const helper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { cwd: workspace, stdio: "ignore" });
+      await new Promise((resolve, reject) => signal.addEventListener("abort", () => { setTimeout(() => helper.kill(), 500); reject(signal.reason); }, { once: true }));
+    },
+  };
+  try {
+    const result = await runClaimedRun({
+      apiBase: api.apiBase,
+      claim: { run: { id: "RUN-STOP" }, task: { id: "TASK-STOP", kind: "execution", taskText: "改" }, snapshot: {}, workspace: { branch: "wb/task-stop-a1" }, leaseToken: "lease" },
+      repositoryPath: repo, runnerDirectory: path.join(directory, "runner-data"), adapter: holdingAdapter, heartbeatMs: 100, timeoutMs: 20_000,
+    });
+    assert.equal(result.status, "cancelled");
+    assert.ok(api.requests.some((request) => request.url.endsWith("/ack-cancel")), "the server is told the stop took effect");
+    assert.ok(!api.requests.some((request) => request.url.endsWith("/result") || request.url.endsWith("/artifacts")), "nothing is reported as a result");
+    await assertMissing(path.join(directory, "runner-data", "worktrees", "RUN-STOP"));
+    assert.equal(await git("branch", "--format=%(refname:short)"), "main", "the branch is gone too");
+    assert.match(await git("worktree", "list"), /^[^\n]*repo[^\n]*\[main\]\s*$/);
+    assert.equal(await git("status", "--porcelain"), "");
+    assert.equal(await readFile(path.join(repo, "math.mjs"), "utf8"), "export const one = 1;\n");
+  } finally { await api.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("the Runner asks the server for launch settings with its own lease and hands them to the adapter", async () => {
+  const directory = await tempDirectory();
+  const { repo } = await demoRepository(directory);
+  const controller = new AbortController();
+  let claimed = false;
+  let launchRequest;
+  let seen;
+  const api = await fakeApi(async (request) => {
+    const { url } = request;
+    if (url === "/api/runner/claim") {
+      if (claimed) return { body: null };
+      claimed = true;
+      return { body: { run: { id: "RUN-L1", executorType: "custom:aider" }, task: { id: "TASK-L1", kind: "analysis", taskText: "x" }, snapshot: {}, workspace: { branch: null }, leaseToken: "lease-L1" } };
+    }
+    if (url.endsWith("/launch-config")) { launchRequest = request; return { body: { env: { OPENAI_API_KEY: "k" }, custom: { id: "aider", command: "aider", args: [] } } }; }
+    if (url.endsWith("/heartbeat")) return { body: { cancelRequested: false, leaseUntil: "later" } };
+    if (url.endsWith("/events")) return { status: 201, body: { inserted: true } };
+    if (url.endsWith("/artifacts")) return { status: 201, body: { id: "ART-1" } };
+    if (url.endsWith("/result")) { setTimeout(() => controller.abort(), 20); return { body: { status: "review" } }; }
+    throw new Error(`Unexpected Runner request ${url}`);
+  });
+  try {
+    await runRunner({
+      apiBase: api.apiBase, runnerId: "r", repositoryPath: repo, runnerDirectory: path.join(directory, "runner-data"), capabilities: ["custom:*"], pollMs: 20, signal: controller.signal,
+      adapter: (claim, launch) => { seen = { executor: claim.run.executorType, launch }; return createFakeAdapter(); },
+    });
+    assert.equal(launchRequest.headers.authorization, "Bearer lease-L1");
+    assert.deepEqual(seen, { executor: "custom:aider", launch: { env: { OPENAI_API_KEY: "k" }, custom: { id: "aider", command: "aider", args: [] } } });
+  } finally { await api.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("a server that refuses or lacks launch settings means 'nothing extra', not a failed run", async () => {
+  for (const reply of [{ status: 404, body: { error: "no" } }, { status: 401, body: { error: "no" } }]) {
+    const api = await fakeApi(async () => reply);
+    try { assert.deepEqual(await fetchLaunchConfig({ apiBase: api.apiBase, claim: { run: { id: "RUN-L2" }, leaseToken: "t" } }), {}); }
+    finally { await api.close(); }
+  }
+  assert.deepEqual(await fetchLaunchConfig({ apiBase: "http://127.0.0.1:1", claim: { run: { id: "RUN-L3" }, leaseToken: "t" } }), {}, "even an unreachable server");
 });
 
 test("Runner stops executing after a lease heartbeat is rejected", async () => {

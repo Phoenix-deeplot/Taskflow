@@ -1,4 +1,5 @@
 import { all, one } from "./db.mjs";
+import { normalizeCustomAgents } from "./agent-config.mjs";
 import { ANALYSIS_ACCEPTANCE, DEFAULT_ANALYSIS_TEMPLATE, MAX_ANALYSIS_TEXT, renderAnalysisTaskText } from "./analysis.mjs";
 import { TASK_STATUSES } from "./state-machine.mjs";
 import { workspaceContract } from "./workspace.mjs";
@@ -11,6 +12,8 @@ const SETTING_RULES = {
     }
     return value.trim();
   },
+  // Agents the person added on the settings page (their commands only; credentials are kept elsewhere).
+  "agents.custom": (value) => normalizeCustomAgents(value),
 };
 
 const clip = (text, max) => (String(text ?? "").length > max ? `${String(text).slice(0, max)}…` : String(text ?? ""));
@@ -89,7 +92,8 @@ export function createBatchOps(kit) {
    * counted in `waiting` so the caller can say what is left and why.
    */
   function dispatchAll({ requirementId, kinds, ...options } = {}) {
-    const where = ["workspace_id = ?"]; const params = [workspaceId];
+    // Tasks of a deleted requirement are history, not work to do.
+    const where = ["workspace_id = ?", "(requirement_id IS NULL OR requirement_id NOT IN (SELECT id FROM requirements WHERE deleted_at IS NOT NULL))"]; const params = [workspaceId];
     if (requirementId) { where.push("requirement_id = ?"); params.push(requirementId); }
     if (kinds?.length) { where.push(`kind IN (${kinds.map(() => "?").join(",")})`); params.push(...kinds); }
     const rows = all(db, `SELECT id, status FROM tasks WHERE ${where.join(" AND ")} ORDER BY created_at, rowid`, ...params);
@@ -168,7 +172,7 @@ export function createBatchOps(kit) {
     let phase;
     switch (run.status) {
       case "pending": phase = "等待 Runner 领取"; break;
-      case "running": phase = !run.claimedBy ? "已手动启动，等待你提交结果" : lost ? "Runner 失联" : (lastProgress?.payload.data?.step ?? "执行中"); break;
+      case "running": phase = run.cancelRequested ? "正在终止…（等待 Runner 停下 Agent）" : !run.claimedBy ? "已手动启动，等待你提交结果" : lost ? "Runner 失联" : (lastProgress?.payload.data?.step ?? "执行中"); break;
       case "succeeded": phase = run.reviewDecision === "accepted" ? "已验收通过" : run.reviewDecision === "rejected" ? "已退回" : "已提交结果，待验收"; break;
       case "failed": phase = "执行失败"; break;
       case "cancelled": phase = "已取消"; break;

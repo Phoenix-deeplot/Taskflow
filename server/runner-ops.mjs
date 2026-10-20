@@ -88,12 +88,20 @@ export function createRunnerOps(kit) {
     if (!Array.isArray(capabilities) || !capabilities.length || capabilities.some((entry) => !nonEmpty(entry))) {
       throw invalid("capabilities 必须是非空的字符串数组（Runner 能执行的执行器类型）");
     }
+    // A capability ending in "*" is a prefix ("custom:*" = every agent the person added themselves).
+    const exact = capabilities.filter((entry) => !entry.endsWith("*"));
+    const prefixes = capabilities.filter((entry) => entry.endsWith("*") && entry.length > 1).map((entry) => entry.slice(0, -1));
+    const matchers = [];
+    const matcherParams = [];
+    if (exact.length) { matchers.push(`r.executor_type IN (${exact.map(() => "?").join(",")})`); matcherParams.push(...exact); }
+    for (const prefix of prefixes) { matchers.push("substr(r.executor_type, 1, ?) = ?"); matcherParams.push(prefix.length, prefix); }
+    if (!matchers.length) throw invalid("capabilities 必须是非空的字符串数组（Runner 能执行的执行器类型）");
     return tx(() => {
       const now = clock();
       expireAt(now);
       const pending = all(db, `SELECT r.* FROM task_runs r JOIN tasks t ON t.id = r.task_id
-                               WHERE t.workspace_id = ? AND r.status = 'pending' AND r.executor_type IN (${capabilities.map(() => "?").join(",")})
-                               ORDER BY r.started_at, r.rowid`, workspaceId, ...capabilities);
+                               WHERE t.workspace_id = ? AND r.status = 'pending' AND (${matchers.join(" OR ")})
+                               ORDER BY r.started_at, r.rowid`, workspaceId, ...matcherParams);
       if (!pending.length) return null;
       const held = heldScopes(now);
       for (const run of pending) {
@@ -231,8 +239,22 @@ export function createRunnerOps(kit) {
     return all(db, "SELECT * FROM artifacts WHERE run_id = ? ORDER BY created_at, rowid", runId).map(toArtifact);
   }
 
+  /**
+   * Proves a caller holds the lease of a running run and says which executor it is for. The HTTP layer uses this to
+   * hand the Runner the credentials of exactly that executor, and nobody else.
+   */
+  function leaseHolderInfo(runId, leaseToken) {
+    return tx(() => {
+      const run = requireRunRow(runId);
+      if (!run.claimed_by) throw invalid("该运行不是由 Runner 领取的");
+      requireToken(run, leaseToken);
+      if (run.status !== "running") throw lost(`运行已是 ${run.status}`, run.status);
+      return { runId, executorType: run.executor_type };
+    });
+  }
+
   return {
-    api: { claimRun, heartbeat, appendRunEvent, cancelRun, ackCancel, expireLeases, addArtifact, listArtifacts },
+    api: { claimRun, heartbeat, appendRunEvent, cancelRun, ackCancel, expireLeases, addArtifact, listArtifacts, leaseHolderInfo },
     internal: { requireToken, replay, remember },
   };
 }

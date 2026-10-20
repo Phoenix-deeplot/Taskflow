@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, stat } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -40,14 +40,29 @@ async function createWorktree(repositoryPath, workspacePath, runId, preferredBra
   }
   return {
     branch: branchName,
-    remove: async () => {
-      // A dirty worktree is intentionally retained for recovery; never force-remove user work.
-      try {
-        await runCommand("git", ["-C", repositoryPath, "worktree", "remove", workspacePath]);
-        // Remove the new branch only if Git confirms it is fully merged (nothing was committed on it).
-        await runCommand("git", ["-C", repositoryPath, "branch", "-d", branchName]).catch(() => {});
+    /**
+     * By default a worktree with uncommitted work is kept for recovery, never force-removed. `discard` is for a run the
+     * person stopped on purpose: everything it did is thrown away, worktree and branch both. On Windows a program that was
+     * just killed can hold its folder open for a moment, so removal is retried before giving up.
+     */
+    remove: async ({ discard = false } = {}) => {
+      const git = (...args) => runCommand("git", ["-C", repositoryPath, ...args]);
+      let lastError = null;
+      for (let attempt = 0; attempt < (discard ? 6 : 1); attempt += 1) {
+        try { await git("worktree", "remove", ...(discard ? ["--force"] : []), workspacePath); lastError = null; break; }
+        catch (error) {
+          lastError = error;
+          // Git may already have taken the folder out of its list while the (now empty) directory is still held open.
+          if (discard && !(await git("worktree", "list", "--porcelain")).toLowerCase().includes(workspacePath.replaceAll("\\", "/").toLowerCase())) {
+            await rm(workspacePath, { recursive: true, force: true }).catch(() => {});
+            if (!(await stat(workspacePath).catch(() => null))) { lastError = null; break; }
+          }
+          if (attempt < 5 && discard) await sleep(300 * (attempt + 1));
+        }
       }
-      catch (error) { console.warn(`Keeping non-clean Runner worktree ${workspacePath}: ${error.message}`); }
+      if (lastError) { console.warn(`Keeping Runner worktree ${workspacePath}: ${lastError.message}`); return; }
+      // Without `discard` the branch is removed only if Git confirms nothing was committed on it.
+      await git("branch", discard ? "-D" : "-d", branchName).catch(() => {});
     },
   };
 }
@@ -173,7 +188,7 @@ export async function runClaimedRun({
       try { await callApi(`/api/runs/${encodeURIComponent(runId)}/ack-cancel`, {}); }
       catch (error) { if (error.status !== 409 && error.status !== 401) throw error; }
     }
-    await removeWorktree();
+    await removeWorktree({ discard: true }); // the person stopped it: nothing of it is kept
     return { status: "cancelled", runId };
   }
   if (outcome?.lost || heartbeatFailure) {
@@ -240,6 +255,21 @@ export async function runClaimedRun({
   return { status: "succeeded", runId, runner: os.hostname() };
 }
 
+/**
+ * Asks the server for what this run needs to start: credentials set on the settings page for its executor and, for an
+ * agent the person added, how to launch it. Held in memory for this run only. An older server without the endpoint
+ * simply means "nothing extra".
+ */
+export async function fetchLaunchConfig({ apiBase, claim, fetchImpl = fetch }) {
+  try {
+    const response = await fetchImpl(new URL(`/api/runs/${encodeURIComponent(claim.run.id)}/launch-config`, apiBase), {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${claim.leaseToken}` }, body: "{}",
+    });
+    if (!response.ok) return {};
+    return (await response.json().catch(() => ({}))) || {};
+  } catch { return {}; }
+}
+
 export async function runRunner({
   apiBase,
   runnerId = `${os.hostname()}-${process.pid}`,
@@ -266,8 +296,10 @@ export async function runRunner({
       if (!response.ok) throw new Error(claim?.error || `claim failed (${response.status})`);
       if (!claim) { await sleep(pollMs); continue; }
       const activeRepositoryPath = resolveRepositoryPath ? await resolveRepositoryPath(claim) : repositoryPath;
-      const activeAdapter = typeof adapter === "function" ? await adapter(claim) : adapter;
-      const outcome = await runClaimedRun({ apiBase, claim, repositoryPath: activeRepositoryPath, runnerDirectory, adapter: activeAdapter, fetchImpl, heartbeatMs: Math.max(1_000, Math.floor(leaseSeconds * 1000 / 3)), signal });
+      const launch = typeof adapter === "function" ? await fetchLaunchConfig({ apiBase, claim, fetchImpl }) : {};
+      const activeAdapter = typeof adapter === "function" ? await adapter(claim, launch) : adapter;
+      // A short heartbeat is also how a "stop" from the page reaches this process, so keep it well under the lease.
+      const outcome = await runClaimedRun({ apiBase, claim, repositoryPath: activeRepositoryPath, runnerDirectory, adapter: activeAdapter, fetchImpl, heartbeatMs: Math.min(5_000, Math.max(1_000, Math.floor(leaseSeconds * 1000 / 3))), signal });
       console.log(`[runner] ${outcome.status}: ${claim.run?.id}${outcome.error ? ` — ${outcome.error}` : ""}`);
     } catch (error) {
       console.error(`[runner] ${error.message}`);

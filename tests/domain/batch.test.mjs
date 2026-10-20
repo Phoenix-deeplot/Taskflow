@@ -251,7 +251,7 @@ test("dispatchAll can be limited to one requirement or one kind of task", () => 
 // ---------- settings ----------
 test("the project directory is a setting: empty by default, validated, changed on record", () => {
   const { wb } = memoryWorkbench();
-  assert.deepEqual(wb.listSettings(), { "project.path": null });
+  assert.deepEqual(wb.listSettings(), { "project.path": null, "agents.custom": null });
   assert.equal(wb.getSetting("project.path"), null);
   assert.equal(wb.getSetting("project.path", "D:/default"), "D:/default");
   assert.equal(wb.setSetting("project.path", "  E:\\Ztree\\chuhaila\\requirements-workbench  "), "E:\\Ztree\\chuhaila\\requirements-workbench");

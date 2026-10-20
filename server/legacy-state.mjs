@@ -38,7 +38,9 @@ export function exportLegacyState(db, workbench) {
     decisionNote: r.decisionNote, createdAt: r.createdAt, updatedAt: r.updatedAt, revision: r.revision,
   }));
   const itemMap = new Map(items.map((item) => [item.id, item]));
-  const tasks = workbench.listTasks().map((row) => {
+  // Tasks of a deleted requirement stay in the database as history but are not shown (they come back if it is restored).
+  const deletedRequirementIds = new Set(workbench.listRequirements({ includeDeleted: true }).filter((r) => r.deletedAt).map((r) => r.id));
+  const tasks = workbench.listTasks().filter((row) => !deletedRequirementIds.has(row.requirementId)).map((row) => {
     const detail = workbench.getTask(row.id);
     const feature = itemMap.get(row.requirementId);
     const runs = detail.runs.map((run) => ({

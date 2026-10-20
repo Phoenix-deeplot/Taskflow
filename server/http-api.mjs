@@ -2,6 +2,7 @@ import { createWorkbench } from "./service.mjs";
 import { exportLegacyState, hasWorkspaceData, syncLegacyState } from "./legacy-state.mjs";
 import { commitLegacyImport, previewLegacyImport } from "./legacy-import.mjs";
 import { previewRestore, restoreFromExport } from "./restore.mjs";
+import { createSecretStore, launchConfigFor, providerEnvironment } from "./agent-config.mjs";
 import { createProviderGateway } from "./provider-gateway.mjs";
 import { proposeSplit } from "./split.mjs";
 import { WorkbenchError } from "./util.mjs";
@@ -34,9 +35,31 @@ function parseId(value) {
   catch { throw new WorkbenchError("INVALID_ID", "路径 ID 编码无效", 400); }
 }
 
-export function createApiHandler({ db, backupDirectory, databaseName = "requirements.sqlite", projectDirectory = process.cwd(), workbench: injectedWorkbench, providerGateway: injectedProviderGateway, detectAgents }) {
+export function createApiHandler({
+  db, backupDirectory, databaseName = "requirements.sqlite", projectDirectory = process.cwd(), workbench: injectedWorkbench,
+  providerGateway: injectedProviderGateway, detectAgents, secretStore: injectedSecretStore, detectCustomAgent, startClaudeLogin,
+}) {
   const workbench = injectedWorkbench || createWorkbench(db);
-  const providerGateway = injectedProviderGateway || createProviderGateway();
+  // Keys set on the settings page. The gateway reads them (before the process environment) when it calls a model.
+  const secretStore = injectedSecretStore || createSecretStore();
+  const providerGateway = injectedProviderGateway || createProviderGateway({ env: providerEnvironment(secretStore) });
+  const customAgents = () => workbench.getSetting("agents.custom") || [];
+
+  /** Built-in and custom agents with what the page needs to show: can it run now, and what is missing. */
+  async function describeAgents() {
+    const detected = detectAgents ? await detectAgents() : {};
+    const claude = detected.claude;
+    // A token or API key set on the settings page counts as signed in: the Runner hands it to the Claude Code process.
+    if (claude?.installed && !claude.loggedIn && (secretStore.has("claude-code-token") || secretStore.has("claude-code-api-key"))) {
+      Object.assign(claude, { loggedIn: true, available: true, reason: null, mode: secretStore.has("claude-code-token") ? "已配置订阅令牌" : "已配置 API Key" });
+    }
+    const custom = await Promise.all(customAgents().map(async (agent) => ({
+      ...agent, executorType: `custom:${agent.id}`,
+      secretConfigured: agent.secretEnv ? secretStore.has(`custom:${agent.id}`) : null,
+      ...(detectCustomAgent ? await detectCustomAgent(agent) : { available: null, reason: null }),
+    })));
+    return { ...detected, custom };
+  }
 
   const handleApi = async function handleApi(request, response, pathname) {
     const method = request.method || "GET";
@@ -70,8 +93,41 @@ export function createApiHandler({ db, backupDirectory, databaseName = "requirem
         return true;
       }
       if (pathname === "/api/agents" && method === "GET") {
-        const detected = detectAgents ? await detectAgents() : {};
-        send(response, 200, detected);
+        send(response, 200, await describeAgents());
+        return true;
+      }
+      if (pathname === "/api/agents/claude/login" && method === "POST") {
+        if (!startClaudeLogin) throw new WorkbenchError("UNSUPPORTED", "这个服务不支持从页面发起登录", 501);
+        await readBody(request);
+        send(response, 202, await startClaudeLogin());
+        return true;
+      }
+      // The settings page: which keys are set (never their values) and which custom agents exist.
+      if (pathname === "/api/agent-config" && method === "GET") {
+        send(response, 200, { keys: secretStore.describe(), customAgents: customAgents() });
+        return true;
+      }
+      if (parts[1] === "agent-config" && parts[2] === "keys" && parts.length === 4) {
+        const slot = parseId(parts[3]);
+        if (method === "PUT") {
+          const body = await readBody(request);
+          secretStore.set(slot, body.value);
+          send(response, 200, { slot, ...secretStore.describe()[slot] });
+          return true;
+        }
+        if (method === "DELETE") {
+          secretStore.clear(slot);
+          send(response, 200, { slot, ...secretStore.describe()[slot] });
+          return true;
+        }
+      }
+      if (pathname === "/api/agent-config/custom-agents" && method === "PUT") {
+        const body = await readBody(request);
+        const before = customAgents();
+        const saved = workbench.setSetting("agents.custom", body.agents);
+        // An agent that was removed takes its credential with it.
+        for (const gone of before.filter((old) => !saved.some((agent) => agent.id === old.id))) secretStore.clear(`custom:${gone.id}`);
+        send(response, 200, { customAgents: saved });
         return true;
       }
       if (pathname === "/api/analysis-template" && method === "GET") {
@@ -192,6 +248,15 @@ export function createApiHandler({ db, backupDirectory, databaseName = "requirem
         const runId = parseId(parts[2]);
         const body = await readBody(request);
         if (parts[3] === "cancel") { send(response, 200, workbench.cancelRun(runId, body)); return true; }
+        // The one place a credential leaves the server: to the Runner that holds this run's lease, for this run's executor only.
+        if (parts[3] === "launch-config") {
+          const leaseToken = /^Bearer\s+(.+)$/i.exec(String(request.headers.authorization || ""))?.[1]?.trim();
+          if (!leaseToken) { send(response, 401, { code: "RUNNER_TOKEN_REQUIRED", error: "需要有效的租约令牌" }); return true; }
+          if (request.headers.origin || request.headers["sec-fetch-site"]) { send(response, 403, { code: "RUNNER_CALLBACK_BROWSER_BLOCKED", error: "浏览器页面不能读取启动配置" }); return true; }
+          const holder = workbench.leaseHolderInfo(runId, leaseToken);
+          send(response, 200, launchConfigFor(holder.executorType, secretStore, customAgents()));
+          return true;
+        }
         const callbackRoutes = new Set(["heartbeat", "events", "result", "failure", "artifacts"]);
         if (parts[3] === "ack-cancel" || callbackRoutes.has(parts[3])) {
           const authorization = String(request.headers.authorization || "");
@@ -235,7 +300,7 @@ export function createApiHandler({ db, backupDirectory, databaseName = "requirem
       return false;
     } catch (error) {
       const status = error instanceof WorkbenchError ? error.status : error instanceof TypeError || error instanceof RangeError ? 400 : 500;
-      if (status >= 500) console.error("Local workbench API failed", error);
+      if (status >= 500 && !(error instanceof WorkbenchError)) console.error("Local workbench API failed", error);
       send(response, status, { error: error.message || "内部错误", code: error.code || "INTERNAL", details: error.details });
       return true;
     }

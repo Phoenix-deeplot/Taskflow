@@ -126,12 +126,14 @@ ${JSON.stringify(snapshot.workspace?.requirements || [], null, 2)}
       await navigator.clipboard.writeText(promptText);
       api.toast("任务已启动；指令已复制，请交给卡片上标记的 Agent 执行");
     } catch {
-      window.prompt("任务已启动。复制以下指令并交给对应 Agent：", promptText);
+      window.WBDialog.copyText("任务已启动。复制以下指令并交给对应 Agent：", promptText);
     }
   }
   window.startWorkbenchTask = startTask;
 
-  function transitionTask(taskId, target) {
+  // Asks in the page (never with the browser's own dialogs). Everything up to the first question runs synchronously, so a
+  // move to "working" — which asks nothing — still changes the state before the caller's next line.
+  async function transitionTask(taskId, target) {
     const state = getState();
     const task = state.tasks.find((item) => item.id === taskId);
     if (!task) return;
@@ -141,18 +143,19 @@ ${JSON.stringify(snapshot.workspace?.requirements || [], null, 2)}
       api.render();
       return;
     }
-    if (target === "done" && !confirm("确认该任务成果已由负责人验收通过？")) {
+    const ask = async (message, value = "") => (await window.WBDialog.prompt(message, { value, multiline: true }))?.trim() || "";
+    if (target === "done" && !(await window.WBDialog.confirm("确认该任务成果已由负责人验收通过？", { okText: "验收通过" }))) {
       api.render();
       return;
     }
     let blockedReason = task.blockedReason || "";
     if (target === "review" && !task.suggestion?.trim()) {
-      const result = prompt("提交验收前请填写本次执行结果摘要", "")?.trim() || "";
+      const result = await ask("提交验收前请填写本次执行结果摘要");
       if (!result) { api.toast("提交验收需要结果摘要"); api.render(); return; }
       task.suggestion = result;
     }
     if (target === "blocked") {
-      blockedReason = prompt("请填写阻塞原因（必填）", blockedReason)?.trim() || "";
+      blockedReason = await ask("请填写阻塞原因（必填）", blockedReason);
       if (!blockedReason) {
         api.toast("阻塞任务必须填写原因");
         api.render();
@@ -160,7 +163,7 @@ ${JSON.stringify(snapshot.workspace?.requirements || [], null, 2)}
       }
     }
     if (target === "queued" && ["working", "review", "done"].includes(current)) {
-      blockedReason = prompt(current === "review" ? "请填写验收退回意见" : current === "done" ? "请填写重新打开任务的原因" : "请填写退回待执行的原因", blockedReason)?.trim() || "";
+      blockedReason = await ask(current === "review" ? "请填写验收退回意见" : current === "done" ? "请填写重新打开任务的原因" : "请填写退回待执行的原因", blockedReason);
       if (!blockedReason) { api.toast("退回或重开任务需要填写原因"); api.render(); return; }
     }
     const before = JSON.parse(JSON.stringify(task));
