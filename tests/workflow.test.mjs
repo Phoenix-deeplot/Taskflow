@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 /**
@@ -13,18 +16,59 @@ const { default: yaml } = await import("js-yaml").catch(() => ({ default: null }
 const workflow = yaml ? yaml.load(source) : null;
 const stepsOf = (job) => workflow.jobs[job].steps;
 
-test("the workflow is valid YAML with the two jobs it needs", { skip: !yaml }, () => {
-  assert.deepEqual(Object.keys(workflow.jobs), ["build", "site"]);
+test("the workflow is valid YAML with the three jobs it needs", { skip: !yaml }, () => {
+  assert.deepEqual(Object.keys(workflow.jobs), ["gate", "build", "site"]);
+  assert.equal(workflow.jobs.build.needs, "gate");
   assert.equal(workflow.jobs.site.needs, "build", "the site is only rebuilt after a release exists");
 });
 
-test("it runs on a push to main (and by hand), one at a time, and can be skipped from a commit message", { skip: !yaml }, () => {
+test("it runs on a push to main (and by hand), one at a time", { skip: !yaml }, () => {
   assert.deepEqual(workflow.on.push.branches, ["main"]);
   assert.ok("workflow_dispatch" in workflow.on);
   assert.equal(workflow.on.push.tags, undefined, "pushing the release's own tag must not start another release");
   assert.equal(workflow.concurrency["cancel-in-progress"], false, "never cancel a release half-way");
-  assert.match(workflow.jobs.build.if, /\[skip release\]/);
-  assert.match(workflow.jobs.build.if, /!contains\(github\.event\.head_commit\.message/);
+  assert.equal(workflow.jobs.build.if, "${{ needs.gate.outputs.publish == 'true' }}");
+});
+
+// This is the bug the first push hit: a commit message that merely MENTIONED the switch skipped the whole release.
+// The decision is made by the real script from the workflow, run with the commit message in the environment, as GitHub does.
+// A bash that passes environment variables through and understands C:/ paths (Git Bash, as GitHub's Windows runners use).
+// Windows may also have WSL's bash.exe first on PATH, which does neither, so each candidate is probed.
+const gitRoot = (() => {
+  const run = spawnSync("git", ["--exec-path"], { encoding: "utf8" });
+  return run.status === 0 ? path.resolve(run.stdout.trim(), "../../..") : null; // <root>/mingw64/libexec/git-core on Git for Windows
+})();
+const bash = [gitRoot && path.join(gitRoot, "bin", "bash.exe"), "C:/Program Files/Git/bin/bash.exe", "bash"].filter(Boolean).find((candidate) => {
+  const probe = spawnSync(candidate, ["-c", 'echo "$PROBE"'], { env: { ...process.env, PROBE: "ok" }, encoding: "utf8" });
+  return probe.status === 0 && probe.stdout.trim() === "ok";
+});
+const bashAvailable = Boolean(bash);
+function decide({ event = "push", message }) {
+  const script = workflow.jobs.gate.steps.find((step) => step.id === "decide").run;
+  const directory = mkdtempSync(path.join(os.tmpdir(), "gate-"));
+  const output = path.join(directory, "output.txt").replaceAll("\\", "/");
+  try {
+    writeFileSync(output, "");
+    const run = spawnSync(bash, ["-c", script], { env: { ...process.env, EVENT: event, MESSAGE: message, GITHUB_OUTPUT: output }, encoding: "utf8" });
+    assert.equal(run.status, 0, run.stderr);
+    return readFileSync(output, "utf8").trim();
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+}
+
+test("[skip release] in the first line stops a release; anywhere else it is only text", { skip: !yaml || !bashAvailable }, () => {
+  assert.equal(decide({ message: "docs: typo [skip release]\n\nlonger explanation" }), "publish=false");
+  assert.equal(decide({ message: "[skip release] wip" }), "publish=false");
+  assert.equal(decide({ message: "ci: publish a release on every push\n\n- put [skip release] in a commit message to push without publishing." }), "publish=true", "mentioning it in the body does not trip it");
+  assert.equal(decide({ message: "ci: ok\n[skip release]" }), "publish=true", "second line");
+  assert.equal(decide({ message: "feat: normal change" }), "publish=true");
+  assert.equal(decide({ message: "" }), "publish=true");
+  assert.equal(decide({ event: "workflow_dispatch", message: "docs: x [skip release]" }), "publish=true", "starting it by hand always publishes");
+});
+
+test("the commit message reaches the script through the environment, not by being pasted into it", { skip: !yaml }, () => {
+  const step = workflow.jobs.gate.steps.find((entry) => entry.id === "decide");
+  assert.equal(step.env.MESSAGE, "${{ github.event.head_commit.message }}");
+  assert.doesNotMatch(step.run, /\$\{\{/);
 });
 
 test("permissions are the least that work: read by default, write only where a release or a deploy needs it", { skip: !yaml }, () => {

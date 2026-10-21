@@ -3,7 +3,8 @@
 #   2. builds the Windows installer (exe) and the portable web package (zip), versioned MAJOR.MINOR (package.json) + run number;
 #   3. creates a GitHub Release with both files and a SHA-256 list;
 #   4. rebuilds the public site (dist/cover.html as the home page) with the new release's download links and deploys it to GitHub Pages.
-# Put [skip release] in a commit message to push without publishing. The workflow can also be started by hand (Actions tab).
+# Put [skip release] in the FIRST LINE of a commit message to push without publishing (a mention further down is ignored,
+# so a message that merely talks about the switch does not trip it). The workflow can also be started by hand (Actions tab).
 name: Release and publish site
 
 on:
@@ -20,9 +21,32 @@ permissions:
   contents: read
 
 jobs:
+  gate:
+    name: Decide whether to publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      publish: ${{ steps.decide.outputs.publish }}
+    steps:
+      - name: Look for [skip release] in the commit's first line
+        id: decide
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          subject="$(printf '%s' "$MESSAGE" | head -n 1)"
+          if [ "$EVENT" = "push" ] && printf '%s' "$subject" | grep -qF '[skip release]'; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Not publishing: the commit's first line contains [skip release]"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
     name: Test, build and release
-    if: ${{ !contains(github.event.head_commit.message, '[skip release]') }}
+    needs: gate
+    if: ${{ needs.gate.outputs.publish == 'true' }}
     runs-on: windows-latest
     timeout-minutes: 45
     permissions:
