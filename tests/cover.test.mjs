@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { LINK_MARKERS, TEXT_MARKERS } from "../scripts/render-site.mjs";
 
 /**
- * dist/cover.html is the product guide. It is also uploaded on its own (renamed index.html, with the two packages in
- * downloads/) to a static host that has none of the app, so it must stand alone and must not link to anything that is
- * missing there.
+ * dist/cover.html is the product guide. It is also the home page of the public site (GitHub Pages, renamed index.html by
+ * scripts/render-site.mjs), where none of the app exists, so it must stand alone. Its download buttons carry markers that the
+ * release workflow rewrites to the newest release; the values written in the file are only defaults.
  */
 const cover = readFileSync(new URL("../dist/cover.html", import.meta.url), "utf8");
 const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const tags = (pattern) => [...cover.matchAll(pattern)].map((match) => match[0]);
+const REPO = "Phoenix-deeplot/Taskflow";
 
 test("the cover's script parses", () => {
   const scripts = [...cover.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
@@ -17,13 +19,19 @@ test("the cover's script parses", () => {
   assert.doesNotThrow(() => new Function(scripts[0]));
 });
 
-test("the cover needs nothing from another site and links only to itself, the workbench and the downloads", () => {
+test("the cover needs nothing from another site; it links to itself, the workbench, this repository's releases and the two backup drives", () => {
   assert.doesNotMatch(cover, /<script[^>]+src=/);
   assert.doesNotMatch(cover, /<link[^>]+rel="stylesheet"/);
-  assert.doesNotMatch(cover, /(?:src|href)="https?:/);
+  assert.doesNotMatch(cover, /\ssrc="https?:/);
   const hrefs = [...cover.matchAll(/href="([^"]+)"/g)].map((match) => match[1]).filter((href) => !href.startsWith("data:"));
   assert.ok(hrefs.length > 10);
-  for (const href of hrefs) assert.match(href, /^(#[\w-]+|\.\/index\.html|\.\/downloads\/[^/]+)$/, `unexpected link: ${href}`);
+  const allowed = [
+    /^#[\w-]+$/, /^\.\/index\.html$/,
+    new RegExp(`^https://github\\.com/${REPO}/releases(/latest|/tag/v\\d+\\.\\d+\\.\\d+|/download/v\\d+\\.\\d+\\.\\d+/[\\w.-]+)?$`),
+    /^https:\/\/(cloud\.189\.cn|wwaps\.lanzoue\.com)\/[\w./?=&%-]*$/, // backup downloads kept by hand
+  ];
+  for (const href of hrefs) assert.ok(allowed.some((pattern) => pattern.test(href)), `unexpected link: ${href}`);
+  for (const tag of tags(/<a [^>]*href="https:[^"]*"[^>]*>/g)) assert.match(tag, /rel="noopener"/, `${tag} opens another site: it must say rel="noopener"`);
 });
 
 test("every in-page anchor points at an element that exists", () => {
@@ -35,58 +43,28 @@ test("on the public site only the downloads are offered; the workbench link is f
   const toWorkbench = tags(/<a [^>]*href="\.\/index\.html"[^>]*>/g);
   assert.ok(toWorkbench.length >= 3);
   for (const tag of toWorkbench) assert.match(tag, /data-local[^>]*\shidden|data-local\s+hidden/, `${tag} must be local-only and hidden until the script decides`);
-  for (const tag of tags(/<a [^>]*href="\.\/downloads\/[^"]+"[^>]*>/g)) assert.match(tag, /data-public/, `${tag} must disappear inside the local app, where nothing is served from downloads/`);
+  for (const tag of tags(/<a [^>]*href="https:\/\/github\.com\/[^"]*"[^>]*>/g)) assert.match(tag, /data-public|data-release-link/, `${tag} is a download and must disappear inside the local app`);
   assert.match(cover, /\["127\.0\.0\.1", "localhost", "\[::1\]"\]\.includes\(location\.hostname\)/);
 });
 
-test("the download part names the version package.json builds, and the two packages the build scripts produce", () => {
-  assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
-  assert.ok(cover.includes(`<code>Taskflow Setup ${manifest.version}.exe</code>`), "electron-builder names the installer 'Taskflow Setup <version>.exe'");
-  assert.ok(cover.includes(`./downloads/Taskflow-Web-${manifest.version}.zip`), "scripts/package-taskflow.mjs names the portable package Taskflow-Web-<version>.zip");
-  assert.ok(cover.includes(`V${manifest.version}`));
-  assert.doesNotMatch(cover, /downloads\/[^"]*\.exe/, "the installer is shared from a network drive, not from the static host");
-});
-
-test("the installer's network-drive link is filled in one place, must be https, and shows 'coming soon' until then", () => {
-  const url = /const DESKTOP_DOWNLOAD_URL = "([^"]*)";/.exec(cover);
-  const code = /const DESKTOP_DOWNLOAD_CODE = "([^"]*)";/.exec(cover);
-  assert.ok(url && code, "the two constants the page owner edits must exist");
-  assert.match(url[1], /^(https:\/\/\S+)?$/, "empty, or an https:// link");
-  assert.match(cover, /if \(\/\^https:\\\/\\\/\/\.test\(DESKTOP_DOWNLOAD_URL\)\)/, "the script refuses anything that is not https");
-  for (const id of ["dl-desktop-link", "dl-desktop-code", "dl-desktop-soon"]) assert.ok(cover.includes(`id="${id}"`), id);
-  assert.match(cover, /<a [^>]*id="dl-desktop-link"[^>]*\shidden/, "no link until one is configured");
-  assert.doesNotMatch(cover, /<a [^>]*id="dl-desktop-link"[^>]*\shref=/, "the href is only ever set by the script, from the constant");
-  assert.match(cover, /安装包的网盘链接即将提供/);
-});
-
-test("the network-drive button works end to end: configured -> link, code and no 'coming soon'; empty -> only 'coming soon'", () => {
-  const script = /<script>([\s\S]*?)<\/script>/.exec(cover)[1];
-  const run = ({ url, code, hostname = "example.com" }) => {
-    const nodes = Object.fromEntries(["dl-desktop-link", "dl-desktop-code", "dl-desktop-soon"].map((id) => [id, { hidden: id !== "dl-desktop-soon" ? true : false, textContent: "", href: "" }]));
-    const stub = () => ({ addEventListener() {}, setAttribute() {}, classList: { add() {}, toggle: () => false, remove() {} }, contains: () => false });
-    const document = {
-      documentElement: { classList: { add() {} } },
-      getElementById: (id) => nodes[id] || stub(),
-      querySelectorAll: () => [],
-    };
-    const patched = script.replace('const DESKTOP_DOWNLOAD_URL = "";', `const DESKTOP_DOWNLOAD_URL = ${JSON.stringify(url)};`).replace('const DESKTOP_DOWNLOAD_CODE = "";', `const DESKTOP_DOWNLOAD_CODE = ${JSON.stringify(code)};`);
-    new Function("document", "location", "window", "IntersectionObserver", patched)(document, { hostname }, { matchMedia: () => ({ matches: true }) }, undefined);
-    return nodes;
-  };
-  const filled = run({ url: "https://pan.example.com/s/abc", code: "k3f9" });
-  assert.equal(filled["dl-desktop-link"].href, "https://pan.example.com/s/abc");
-  assert.equal(filled["dl-desktop-link"].hidden, false);
-  assert.equal(filled["dl-desktop-soon"].hidden, true);
-  assert.equal(filled["dl-desktop-code"].textContent, "提取码：k3f9");
-  assert.equal(filled["dl-desktop-code"].hidden, false);
-  const noCode = run({ url: "https://pan.example.com/s/abc", code: "" });
-  assert.equal(noCode["dl-desktop-code"].hidden, true);
-  for (const bad of ["", "http://pan.example.com/s/abc", "javascript:alert(1)", "//pan.example.com"]) {
-    const nodes = run({ url: bad, code: "x" });
-    assert.equal(nodes["dl-desktop-link"].hidden, true, `${bad || "(empty)"} must not become a link`);
-    assert.equal(nodes["dl-desktop-link"].href, "");
-    assert.equal(nodes["dl-desktop-soon"].hidden, false);
+test("every marker the release build rewrites is there, and its default is a safe link to the latest release", () => {
+  for (const name of LINK_MARKERS) assert.ok(cover.includes(`data-release-link="${name}"`), `missing data-release-link="${name}"`);
+  for (const name of TEXT_MARKERS) assert.ok(cover.includes(`data-release-text="${name}"`), `missing data-release-text="${name}"`);
+  for (const tag of tags(/<a [^>]*data-release-link="[^"]+"[^>]*>/g)) {
+    assert.match(tag, new RegExp(`href="https://github\\.com/${REPO}/releases/latest"`), `${tag}: the default must be the repository's latest release`);
+    assert.match(tag, /target="_blank"/);
   }
+});
+
+test("the defaults on the page name the version in package.json and the files the build scripts produce", () => {
+  assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
+  assert.ok(cover.includes(`data-release-text="exe-name">Taskflow-Setup-${manifest.version}.exe<`), "electron-builder is set to name the installer Taskflow-Setup-<version>.exe");
+  assert.equal(manifest.build.nsis.artifactName, "Taskflow-Setup-${version}.${ext}");
+  assert.ok(cover.includes(`data-release-text="version-tag">V${manifest.version}<`));
+  const packager = readFileSync(new URL("../scripts/package-taskflow.mjs", import.meta.url), "utf8");
+  assert.match(packager, /`Taskflow-Web-\$\{manifest\.version\}`/);
+  assert.match(packager, /`\$\{packageName\}\.zip`/);
+  assert.doesNotMatch(cover, /DESKTOP_DOWNLOAD|dl-desktop-|downloads\//, "the network-drive mechanism and the downloads/ folder are gone");
 });
 
 test("the cover says what it takes to run: Git, an Agent CLI, Node for the portable package, and that the build is unsigned", () => {

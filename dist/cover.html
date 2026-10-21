@@ -147,6 +147,9 @@
     .dl-actions { margin-top: auto; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
     .dl-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
     .dl-size { color: #758280; font-size: 13px; }
+    .dl-alt { flex-basis: 100%; margin: 4px 0 0; color: #758280; font-size: 13px; line-height: 1.7; }
+    .dl-alt a, .release-line a { color: var(--teal); text-decoration: underline; }
+    .release-line { margin: 12px 0 0; color: #5b6e70; font-size: 14px; }
     .notice { margin-top: 22px; padding: 14px 18px; border-left: 3px solid var(--gold); border-radius: 0 6px 6px 0; background: #f6f0e2; color: #6c5330; font-size: 13.5px; line-height: 1.85; }
     .notice.info { border-left-color: var(--teal); background: #e9f1ea; color: #355b50; }
 
@@ -375,37 +378,35 @@
           <div class="eyebrow">下载 / DOWNLOAD</div>
           <h2>选一种方式，<br>在自己的电脑上运行。</h2>
           <p>两种方式运行的是同一个 Taskflow，数据都只保存在你的电脑上。目前提供 Windows 版本，当前为 V0.1 预览版。</p>
+          <p class="release-line" data-public>最新版本 <b data-release-text="version-tag">V0.1.0</b><span data-release-text="released"></span> · <a data-release-link="page" href="https://github.com/Phoenix-deeplot/Taskflow/releases/latest" target="_blank" rel="noopener">更新说明与历史版本</a></p>
         </div>
         <!--
-          下载地址：
-            桌面安装包 Taskflow Setup 0.1.0.exe（npm run pack:win 生成，约 106 MB）放网盘：
-              把网盘分享链接填进页面末尾脚本开头的 DESKTOP_DOWNLOAD_URL（必须以 https:// 开头），
-              有提取码的话填 DESKTOP_DOWNLOAD_CODE。留空时按钮位置显示“链接即将提供”。
-              （Vercel 免费版命令行部署的源文件总量上限约 100 MB，装不下它。）
-            Web 便携包 Taskflow-Web-0.1.0.zip（npm run pack:taskflow 生成，不到 1 MB）放站点根目录下的 downloads/ 文件夹。
-          更换版本号时，同步修改这里的文件名、zip 的 href 和卡片上的“V0.1.0”。
+          下载按钮、版本号、文件名和大小都带 data-release-link / data-release-text 标记。
+          每次推送到 main，GitHub Actions 构建并发布新版本，再运行 scripts/render-site.mjs，把标记处换成新版本的真实链接，
+          这个页面（改名为 index.html）随后发布到 GitHub Pages。所以这里的值只是默认值：直接打开本文件时，
+          按钮指向仓库的“最新发布”页面。不要删除或改名这些标记，否则构建会失败（而不是悄悄发布旧链接）。
+          两个网盘链接是手工维护的备用，不会被自动替换。
         -->
         <div class="dl-grid">
           <article class="dl-card primary reveal">
-            <div class="dl-head"><div><h3>Windows 桌面版</h3><p class="dl-meta">推荐 · 安装包 · Windows 10 / 11 · x64</p></div><span class="tag">V0.1.0</span></div>
+            <div class="dl-head"><div><h3>Windows 桌面版</h3><p class="dl-meta">推荐 · 安装包 · Windows 10 / 11 · x64</p></div><span class="tag" data-release-text="version-tag">V0.1.0</span></div>
             <ul class="dl-list">
               <li>一个窗口里包含本地服务、数据库和 Runner，不需要安装 Node.js</li>
               <li>需要另外装好：<b>Git</b>，以及你要用的 Agent 命令行（Claude Code、Codex 等）</li>
               <li>安装时可选目录，并创建桌面和开始菜单快捷方式</li>
             </ul>
-            <p class="dl-steps"><b>安装：</b>从网盘下载 <code>Taskflow Setup 0.1.0.exe</code> 并运行 → 打开 Taskflow → 菜单 <span class="ui">工作台 → 选择项目仓库…</span>。当前构建未代码签名，Windows 可能提示“未知发布者”，请只运行从你信任的来源取得的文件。</p>
+            <p class="dl-steps"><b>安装：</b>下载 <code data-release-text="exe-name">Taskflow-Setup-0.1.0.exe</code> 并运行 → 打开 Taskflow → 菜单 <span class="ui">工作台 → 选择项目仓库…</span>。当前构建未代码签名，Windows 可能提示“未知发布者”，请只运行从你信任的来源取得的文件。</p>
             <div class="dl-actions">
               <div class="dl-row" data-public>
-                <a class="button" id="dl-desktop-link" rel="noopener" hidden>从网盘下载安装包 <span aria-hidden="true">↓</span></a>
-                <span class="dl-size" id="dl-desktop-code" hidden></span>
-                <span class="dl-size" id="dl-desktop-soon">安装包的网盘链接即将提供</span>
-                <span class="dl-size">约 100 MB</span>
+                <a class="button" data-release-link="exe" href="https://github.com/Phoenix-deeplot/Taskflow/releases/latest" target="_blank" rel="noopener">下载安装包 <span aria-hidden="true">↓</span></a>
+                <span class="dl-size" data-release-text="exe-size">约 100 MB</span>
               </div>
+              <p class="dl-alt" data-public>GitHub 下载慢？<a href="https://cloud.189.cn/web/share?code=RZNvYjQvqa2e" target="_blank" rel="noopener">天翼云盘备用</a>（访问码 fi6h；版本可能不是最新）</p>
               <span class="dl-size" data-local hidden>你正在运行 Taskflow，无需再下载。</span>
             </div>
           </article>
           <article class="dl-card reveal">
-            <div class="dl-head"><div><h3>Web 便携版</h3><p class="dl-meta">ZIP · 浏览器使用 · Windows</p></div><span class="tag experimental">V0.1.0</span></div>
+            <div class="dl-head"><div><h3>Web 便携版</h3><p class="dl-meta">ZIP · 浏览器使用 · Windows</p></div><span class="tag experimental" data-release-text="version-tag">V0.1.0</span></div>
             <ul class="dl-list">
               <li>体积很小（不到 1 MB），解压即用，不需要 npm install</li>
               <li>需要另外装好：<b>Node.js 22.13 或更新版本</b>、<b>Git</b>，以及你要用的 Agent 命令行</li>
@@ -413,8 +414,9 @@
             </ul>
             <p class="dl-steps"><b>使用：</b>解压 → 双击 <code>start-taskflow.cmd</code> → 浏览器打开 <code>http://127.0.0.1:4179</code>。关闭启动窗口或按 <code>Ctrl+C</code> 即可停止服务和 Runner。</p>
             <div class="dl-actions">
-              <a class="button secondary" href="./downloads/Taskflow-Web-0.1.0.zip" data-public>下载 ZIP <span aria-hidden="true">↓</span></a>
-              <span class="dl-size" data-public>不到 1 MB</span>
+              <a class="button secondary" data-release-link="web" href="https://github.com/Phoenix-deeplot/Taskflow/releases/latest" target="_blank" rel="noopener" data-public>下载 ZIP <span aria-hidden="true">↓</span></a>
+              <span class="dl-size" data-public data-release-text="web-size">不到 1 MB</span>
+              <p class="dl-alt" data-public>GitHub 下载慢？<a href="https://wwaps.lanzoue.com/isJvU4ctgxgb" target="_blank" rel="noopener">蓝奏云备用</a>（版本可能不是最新）</p>
               <span class="dl-size" data-local hidden>你正在运行 Taskflow，无需再下载。</span>
             </div>
           </article>
@@ -498,22 +500,7 @@
   </main>
   <footer><div class="wrap footer-inner"><span>Taskflow · 本地 AI 协作工作台</span><span>V0.1 PREVIEW · 功能以当前构建为准</span></div></footer>
   <script>
-    // The desktop installer is too big for the static host, so it is shared from a network drive: paste the share link
-    // (it must start with https://) and the extraction code, if there is one, between the quotes. Empty = "coming soon".
-    const DESKTOP_DOWNLOAD_URL = "";
-    const DESKTOP_DOWNLOAD_CODE = "";
     document.documentElement.classList.add("js");
-    if (/^https:\/\//.test(DESKTOP_DOWNLOAD_URL)) {
-      const link = document.getElementById("dl-desktop-link");
-      link.href = DESKTOP_DOWNLOAD_URL;
-      link.hidden = false;
-      document.getElementById("dl-desktop-soon").hidden = true;
-      if (DESKTOP_DOWNLOAD_CODE) {
-        const code = document.getElementById("dl-desktop-code");
-        code.textContent = `提取码：${DESKTOP_DOWNLOAD_CODE}`;
-        code.hidden = false;
-      }
-    }
     // Served by the local app (loopback address): offer "open the workbench". Anywhere else (the public site): offer downloads.
     const local = ["127.0.0.1", "localhost", "[::1]"].includes(location.hostname);
     document.querySelectorAll("[data-local]").forEach((node) => { node.hidden = !local; });

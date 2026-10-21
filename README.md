@@ -117,6 +117,16 @@ npm run desktop
 
 重新构建 Windows 安装包使用 `npm run pack:win`。Electron 依赖需要先安装；当前构建尚未代码签名。
 
+### 自动发布与官网（GitHub Actions）
+
+每次 `git push` 到 `main`，`.github/workflows/release.yml` 会自动：跑测试 → 构建 Windows 安装包（`Taskflow-Setup-版本.exe`）和 Web 便携包（`Taskflow-Web-版本.zip`）→ 创建 GitHub Release（附 SHA-256 清单和自动生成的更新说明）→ 用 `dist/cover.html` 生成官网首页，下载按钮、版本号、文件名和大小都换成这个新版本的真实链接，并发布到 GitHub Pages。
+
+- **版本号**：`package.json` 里的“主.次”加上流水线编号，例如 `0.1.0` 的第 57 次运行发布 `v0.1.57`。要开始新系列（0.2.x），把 `package.json` 的版本改成 `0.2.0`。
+- **推送但不发布**：提交说明里写 `[skip release]`。测试不通过时也不会发布。
+- **首次使用要做一次**：仓库的 Settings → Pages → Build and deployment → Source 选 **GitHub Actions**。（私有仓库用 Pages 需要付费计划。）
+- **官网地址**：`https://<账号>.github.io/<仓库名>/`；页面里“下载”按钮始终指向最新发布。
+- 想本地预览官网：`node scripts/render-site.mjs --out _site --repo 账号/仓库 --tag v0.1.1 --version 0.1.1 --exe Taskflow-Setup-0.1.1.exe --web Taskflow-Web-0.1.1.zip`，再打开 `_site/index.html`。
+
 路线图按“验证之后再扩展”推进，以下是方向，不代表已实现或承诺发布日期：
 
 | 阶段 | 目标 |

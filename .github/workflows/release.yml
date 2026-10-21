@@ -1,0 +1,161 @@
+# Every push to main publishes a new version:
+#   1. runs the tests;
+#   2. builds the Windows installer (exe) and the portable web package (zip), versioned MAJOR.MINOR (package.json) + run number;
+#   3. creates a GitHub Release with both files and a SHA-256 list;
+#   4. rebuilds the public site (dist/cover.html as the home page) with the new release's download links and deploys it to GitHub Pages.
+# Put [skip release] in a commit message to push without publishing. The workflow can also be started by hand (Actions tab).
+name: Release and publish site
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One release at a time: a second push waits for the first to finish instead of racing it.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Test, build and release
+    if: ${{ !contains(github.event.head_commit.message, '[skip release]') }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write # create the tag and the release
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      exe: ${{ steps.files.outputs.exe }}
+      web: ${{ steps.files.outputs.web }}
+      exe_size: ${{ steps.files.outputs.exe_size }}
+      web_size: ${{ steps.files.outputs.web_size }}
+      date: ${{ steps.files.outputs.date }}
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run the tests
+        run: npm test
+
+      - name: Work out the version
+        id: version
+        shell: bash
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          version="$(node scripts/ci-version.mjs "$RUN_NUMBER")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "Publishing v$version"
+
+      - name: Stamp the version into the build
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      # The installer first: electron-builder owns release/, and the zip is added to it afterwards.
+      - name: Build the Windows installer
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false" # not code-signed
+        run: npx electron-builder --win nsis --x64 --publish never
+
+      - name: Build the portable web package
+        run: npm run pack:taskflow
+
+      - name: Check the files and write checksums
+        id: files
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          exe="Taskflow-Setup-$VERSION.exe"
+          web="Taskflow-Web-$VERSION.zip"
+          for file in "$exe" "$web"; do
+            test -f "release/$file" || { echo "::error::release/$file was not produced"; ls -la release; exit 1; }
+          done
+          (cd release && sha256sum "$exe" "$web" > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          {
+            echo "exe=$exe"
+            echo "web=$web"
+            echo "exe_size=$(stat -c %s "release/$exe")"
+            echo "web_size=$(stat -c %s "release/$web")"
+            echo "date=$(date -u +%F)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          files=("release/Taskflow-Setup-$VERSION.exe" "release/Taskflow-Web-$VERSION.zip" "release/SHA256SUMS.txt")
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            # a re-run of the same workflow run: replace the files instead of failing on the existing tag
+            gh release upload "$TAG" "${files[@]}" --clobber
+          else
+            gh release create "$TAG" "${files[@]}" --target "$COMMIT" --title "Taskflow $VERSION" --generate-notes
+          fi
+
+  site:
+    name: Publish the site
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pages: write # deploy to GitHub Pages
+      id-token: write # prove to Pages that the deploy comes from this workflow
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Render the home page with the new release's links
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.build.outputs.tag }}
+          VERSION: ${{ needs.build.outputs.version }}
+          EXE: ${{ needs.build.outputs.exe }}
+          WEB: ${{ needs.build.outputs.web }}
+          EXE_SIZE: ${{ needs.build.outputs.exe_size }}
+          WEB_SIZE: ${{ needs.build.outputs.web_size }}
+          RELEASE_DATE: ${{ needs.build.outputs.date }}
+        run: >
+          node scripts/render-site.mjs --out _site --repo "$REPO" --tag "$TAG" --version "$VERSION"
+          --exe "$EXE" --web "$WEB" --exe-size "$EXE_SIZE" --web-size "$WEB_SIZE" --date "$RELEASE_DATE"
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload the site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
