@@ -667,7 +667,7 @@ export function createWorkbench(db, { clock = () => new Date().toISOString(), ac
   function exportAll() {
     const rows = (table, order) => all(db, `SELECT * FROM ${table} ORDER BY ${order}`);
     return {
-      app: "出海产品需求工作台",
+      app: "产品需求工作台",
       schemaVersion: 2,
       exportedAt: clock(),
       workspace: one(db, "SELECT * FROM workspaces WHERE id = ?", workspaceId),
@@ -694,7 +694,7 @@ export function createWorkbench(db, { clock = () => new Date().toISOString(), ac
   const runnerKit = createRunnerOps(kit);
   const splitOps = createSplitOps(kit);
   const batchOps = createBatchOps({
-    ...kit, toEvent, toRequirement, createTask, dispatchTask, listArtifacts: runnerKit.api.listArtifacts,
+    ...kit, toEvent, toRequirement, createTask, dispatchTask, listArtifacts: runnerKit.api.listArtifacts, startTask, submitResult, acceptTask,
   });
 
   /**

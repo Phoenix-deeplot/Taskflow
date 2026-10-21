@@ -49,7 +49,7 @@ export function exportLegacyState(db, workbench) {
       errorCode: run.errorCode, errorMessage: run.errorMessage, reviewDecision: run.reviewDecision,
     }));
     return {
-      id: row.id, featureId: row.requirementId, model: row.provider, task: row.taskText,
+      id: row.id, featureId: row.requirementId, model: row.provider, task: row.taskText, kind: row.kind, executorType: row.executorType,
       status: row.status, assignee: row.assignee, suggestion: row.resultNote || detail.runs.slice().reverse().find((run) => run.resultSummary)?.resultSummary || "",
       blockedReason: row.blockedReason, createdAt: row.createdAt, updatedAt: row.updatedAt,
       featureTitle: feature?.title || row.legacyRequirementTitle || "",

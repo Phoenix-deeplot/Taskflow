@@ -64,13 +64,13 @@
   const agentLine = (agent) => `<div class="agent-line" data-agent-id="${esc(agent.id)}"><b>${esc(agent.name)}</b><code>${esc([agent.command, ...(agent.args || [])].join(" "))}</code><span class="set-state" data-agent-state="${esc(agent.id)}"></span><button class="btn small" data-edit-agent>编辑</button><button class="btn small danger" data-delete-agent>删除</button></div>`;
 
   function agentForm(agent) {
-    const isNew = agent.id === "";
+    const isNew = editing === "" || editing === "__preset_deepseek_harness__";
     const secretSlot = `custom:${agent.id}`;
     const secretState = !isNew && config.keys[secretSlot]?.configured ? `（已配置 ${esc(config.keys[secretSlot].hint || "")}，留空表示不改）` : "";
     return `<div class="set-form" data-agent-form>
       <div class="field-row"><div class="field"><label>名称</label><input data-f="name" value="${esc(agent.name || "")}" placeholder="例如 Aider"></div>
       <div class="field"><label>标识（小写英文，创建后不能改）</label><input data-f="id" value="${esc(agent.id)}" placeholder="aider" ${isNew ? "" : "disabled"}></div></div>
-      <div class="field"><label>命令（程序名或完整路径）</label><input data-f="command" value="${esc(agent.command || "")}" placeholder="aider  或  C:\\tools\\aider.exe"></div>
+      <div class="field"><label>命令（程序名或完整路径）</label><input data-f="command" value="${esc(agent.command || "")}" placeholder="${editing === "__preset_deepseek_harness__" ? "填写本机 DeepSeek Harness 的实际启动命令" : "aider  或  C:\\tools\\aider.exe"}"></div>
       <div class="field"><label>参数（每行一个，可留空）</label><textarea data-f="args" placeholder="--yes&#10;--message-file&#10;{promptFile}">${esc((agent.args || []).join("\n"))}</textarea></div>
       <p class="set-note">默认把任务说明从标准输入交给程序。参数里可以写：<code>{prompt}</code> 任务说明原文，<code>{promptFile}</code> 存有任务说明的文件路径，<code>{workspace}</code> 工作目录。程序打印出来的内容就是执行结果；它在独立分支的工作目录里运行。</p>
       <div class="field-row"><div class="field"><label>密钥环境变量名（可选）</label><input data-f="secretEnv" value="${esc(agent.secretEnv || "")}" placeholder="例如 OPENAI_API_KEY"></div>
@@ -82,7 +82,7 @@
   function render() {
     const claudeToken = keyRow("claude-code-token", "订阅令牌", { placeholder: "claude setup-token 生成的令牌" });
     const claudeKey = keyRow("claude-code-api-key", "Anthropic API Key", { placeholder: "sk-ant-…（按量计费）" });
-    const editingAgent = editing === null ? null : editing === "" ? { id: "", name: "", command: "", args: [], secretEnv: "" } : config.customAgents.find((agent) => agent.id === editing);
+    const editingAgent = editing === null ? null : editing === "" ? { id: "", name: "", command: "", args: [], secretEnv: "" } : editing === "__preset_deepseek_harness__" ? { id: "deepseek-harness", name: "DeepSeek Harness", command: "", args: [], secretEnv: "" } : config.customAgents.find((agent) => agent.id === editing);
     body.innerHTML = `
       <h3>Claude Code</h3>
       <div class="set-actions"><span data-status="claude" class="agent-status">正在检测…</span><button class="btn small primary" data-login-claude>登录 Claude Code</button><button class="btn small" data-redetect-settings>重新检测</button></div>
@@ -92,9 +92,9 @@
       <div class="set-actions"><span data-status="codex" class="agent-status">正在检测…</span></div>
       <p class="set-note">Codex 使用它自己的登录：在 Codex 应用（或终端 <code>codex login</code>）里登录即可，这里不需要密钥。</p>
       <h3>我添加的 Agent</h3>
-      <p class="set-note">任何能在命令行里读任务说明、改文件的程序都可以加进来，加完后就出现在“分配 AI”的执行器列表里。</p>
+      <p class="set-note">任何能在命令行里读任务说明、改文件的程序都可以加进来，加完后就出现在“分配 AI”的执行器列表里。DeepSeek Harness 先按自定义 Agent 接入，命令由你按本机安装填写。</p>
       ${config.customAgents.length ? config.customAgents.map(agentLine).join("") : '<p class="set-note">还没有添加。</p>'}
-      ${editingAgent ? agentForm(editingAgent) : '<div class="set-actions"><button class="btn small" data-new-agent>＋ 添加 Agent</button></div>'}
+      ${editingAgent ? agentForm(editingAgent) : '<div class="set-actions"><button class="btn small" data-new-agent>＋ 添加 Agent</button><button class="btn small" data-preset-deepseek>＋ 添加 DeepSeek Harness</button></div>'}
       <h3>模型接口（智能拆分需求，可选）</h3>
       <p class="set-note">这些只用于“让模型把需求拆成任务”，由本地服务直接调用；不影响 Claude Code / Codex 的执行。</p>
       ${keyRow("anthropic-api-key", "Claude API Key")}${keyRow("anthropic-model", "Claude 模型名", { secret: false, placeholder: "模型名" })}
@@ -182,7 +182,7 @@
   async function saveAgent() {
     const form = $("[data-agent-form]", body);
     const get = (name) => $(`[data-f="${name}"]`, form).value;
-    const isNew = editing === "";
+    const isNew = editing === "" || editing === "__preset_deepseek_harness__";
     const command = get("command").trim();
     const id = isNew ? (get("id").trim() || slugFrom(command)) : editing;
     const agent = {
@@ -190,6 +190,7 @@
       args: get("args").split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
       secretEnv: get("secretEnv").trim(),
     };
+    if (!command) { api.toast("请填写本机 DeepSeek Harness（或自定义 Agent）的启动命令"); return; }
     const secret = get("secret").trim();
     if (agent.secretEnv && !secret && !(config.keys[`custom:${id}`]?.configured)) { api.toast("填了环境变量名，也要填密钥（或者清空环境变量名）"); return; }
     const list = isNew ? [...config.customAgents, agent] : config.customAgents.map((entry) => (entry.id === id ? agent : entry));
@@ -231,6 +232,15 @@
     if (event.target.closest("[data-login-claude]")) { void loginClaude(); return; }
     if (event.target.closest("[data-redetect-settings]")) { void refreshStatus().then(changed); return; }
     if (event.target.closest("[data-new-agent]")) { editing = ""; render(); return; }
+    if (event.target.closest("[data-preset-deepseek]")) {
+      if (config.customAgents.some((agent) => agent.id === "deepseek-harness")) { api.toast("DeepSeek Harness 已添加，请编辑现有配置"); return; }
+      editing = "__preset_deepseek_harness__";
+      render();
+      const form = $("[data-agent-form]", body);
+      $("[data-f=\"name\"]", form).value = "DeepSeek Harness";
+      $("[data-f=\"id\"]", form).value = "deepseek-harness";
+      return;
+    }
     if (event.target.closest("[data-cancel-agent]")) { editing = null; render(); return; }
     if (event.target.closest("[data-save-agent]")) { void saveAgent(); return; }
     const line = event.target.closest("[data-agent-id]");

@@ -66,6 +66,23 @@ test("Claude, OpenAI, and DeepSeek use server-side credentials and normalize JSO
   } finally { await api.close(); }
 });
 
+test("DeepSeek is told the JSON structure in the prompt (its JSON mode does not know our schema)", async () => {
+  const api = await fakeProviderServer(() => jsonResponse(200, providerEnvelope("deepseek")));
+  const gateway = createProviderGateway({
+    env: { DEEPSEEK_API_KEY: "test-deepseek-secret", DEEPSEEK_MODEL: "deepseek-test" }, endpoints: { deepseek: `${api.base}/chat/completions` }, retries: 0,
+  });
+  try {
+    await gateway.get("deepseek").complete({ system: "请分析。", input: { requirement: "x" }, schema: SPLIT_SCHEMA });
+    const body = api.requests[0].body;
+    assert.equal(body.response_format.type, "json_object");
+    assert.match(body.messages[0].content, /^请分析。/);
+    assert.match(body.messages[0].content, /JSON Schema/);
+    assert.match(body.messages[0].content, /"taskText"/, "the field names the answer must use are in the prompt");
+    assert.match(body.messages[0].content, /"required":\["key","taskText","acceptance","fileScope","dependsOn"\]/, "every field is required, like for the other providers");
+    assert.equal(JSON.stringify(body).includes("test-deepseek-secret"), false);
+  } finally { await api.close(); }
+});
+
 test("provider gateway retries rate limits and never returns remote error bodies that may echo secrets", async () => {
   const api = await fakeProviderServer((_entry, attempt) => attempt === 1
     ? jsonResponse(429, { error: { message: "test-openai-secret should not leak" } })

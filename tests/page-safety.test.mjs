@@ -12,23 +12,24 @@ const enhancements = read("enhancements.js");
 const control = read("agent-control.js");
 const dialogs = read("dialogs.js");
 const settings = read("settings-panel.js");
+const flow = read("analysis-flow.js");
 
 test("every page script parses (a syntax error blanks the page)", () => {
   const inline = [...index.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
   assert.ok(inline.length >= 1);
-  for (const [name, source] of [...inline.map((s, i) => [`index.html inline ${i}`, s]), ["enhancements.js", enhancements], ["agent-control.js", control], ["dialogs.js", dialogs], ["settings-panel.js", settings]]) {
+  for (const [name, source] of [...inline.map((s, i) => [`index.html inline ${i}`, s]), ["enhancements.js", enhancements], ["agent-control.js", control], ["dialogs.js", dialogs], ["settings-panel.js", settings], ["analysis-flow.js", flow]]) {
     assert.doesNotThrow(() => new Function(source), name);
   }
 });
 
 test("every script the page needs is loaded, in an order that works", () => {
   const order = [...index.matchAll(/<script src="\/([\w-]+\.js)"><\/script>/g)].map((m) => m[1]);
-  assert.deepEqual(order, ["dialogs.js", "enhancements.js", "agent-control.js", "settings-panel.js"]);
+  assert.deepEqual(order, ["dialogs.js", "enhancements.js", "agent-control.js", "analysis-flow.js", "settings-panel.js"]);
 });
 
 test("the page never uses the browser's own dialogs (they block everything when the browser does not show them)", () => {
   const withoutBlockComments = (source) => source.replace(/\/\*[\s\S]*?\*\//g, "");
-  for (const [name, source] of [["index.html", index], ["enhancements.js", enhancements], ["agent-control.js", control], ["settings-panel.js", settings]]) {
+  for (const [name, source] of [["index.html", index], ["enhancements.js", enhancements], ["agent-control.js", control], ["settings-panel.js", settings], ["analysis-flow.js", flow]]) {
     assert.doesNotMatch(withoutBlockComments(source), /(?<![.\w])(?:window\.)?(?:confirm|prompt|alert)\(/, `${name} calls a native dialog`);
   }
   for (const method of ["confirm", "prompt", "alert", "copyText"]) assert.match(dialogs, new RegExp(`\\b${method}\\(`));
@@ -47,6 +48,31 @@ test("a requirement can really be deleted, one at a time or several, and 'delete
   assert.match(control, /method: "DELETE"/);
   assert.match(index, /delete:\["不做","delete"\]/);
   assert.doesNotMatch(index, /<option value="delete">删除<\/option>/);
+});
+
+test("analysis comes first and a person confirms it before anything is assigned", () => {
+  // The model analysis is intercepted in the capture phase, before the page's own "分配并分析" handler.
+  assert.match(flow, /document\.addEventListener\("click"[\s\S]*?\.assign-modal \[data-mode="analyze"\][\s\S]*?\}, true\);/);
+  assert.match(flow, /\/analysis\/model/);
+  assert.match(flow, /assign-from-analysis/);
+  assert.match(flow, /\/api\/analysis\/engines/);
+  assert.match(flow, /engines\.defaultEngine/, "a model by default when a key is set up, an Agent otherwise");
+  assert.match(flow, /data-confirm-analysis/, "agent analyses get a confirm button on their cards");
+  assert.match(flow, /new MutationObserver\([\s\S]*?setTimeout\(/, "the card decorating observer is debounced like the others");
+});
+
+test("splitting is judged before it is confirmed, by hand or by AI", () => {
+  for (const route of ["/split/assess", "/split-drafts", "/api/split/evaluate", "/confirm"]) assert.ok(flow.includes(route), route);
+  assert.match(flow, /不需要拆分/, "'no split needed' is shown as an answer");
+  assert.match(flow, /evaluation\.verdict === "bad"/, "an unusable split cannot be confirmed");
+  assert.match(flow, /STALE_DRAFT/);
+  assert.match(flow, /\[data-split-requirement\][\s\S]*?stopImmediatePropagation/, "the old prompt-a-JSON-array button is replaced");
+});
+
+test("the result field of a collaboration task can be filled by a model, and says what to do without a key", () => {
+  assert.match(flow, /data-ai-refine/);
+  assert.match(flow, /record: false/);
+  assert.match(flow, /还没有配置模型 Key/);
 });
 
 test("the settings page keeps secrets out of storage, URLs and logs", () => {

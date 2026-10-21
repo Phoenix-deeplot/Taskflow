@@ -1,147 +1,133 @@
-# 出海产品需求工作台
+# Taskflow
 
-一个用于整理需求、做版本取舍、分配 AI 任务并回收结果的轻量工作台。当前是本地调试原型，页面无需安装第三方依赖。
+> 把需求、AI Agent 任务和可验收交付放在同一条本地工作流里，少丢上下文、少靠人工盯进度。
 
-## 本地运行
+**功能介绍：**[打开 Taskflow 功能介绍页](./dist/cover.html) · **本地试用：**按下方“快速开始”启动后打开 <http://127.0.0.1:4179>
 
-### 环境
+> 当前仓库没有可随 README 展示的实拍截图或录屏。功能介绍页是静态说明页，不是线上 SaaS 试用站；本地启动才是可操作的试用入口。
 
-- Node.js 22.13 或更新版本（使用内置 `node:sqlite`，无需额外安装数据库依赖）
-- Windows、macOS、Linux 均可
+## 三个主要场景
 
-### 启动
-
-在项目目录执行：
-
-```powershell
-npm run dev
-```
-
-或不使用 npm：
-
-```powershell
-node scripts/serve-local.mjs
-```
-
-浏览器打开终端显示的地址，默认是 <http://127.0.0.1:4179>。停止服务按 `Ctrl+C`。如端口被占用，可换一个端口：
-
-```powershell
-node scripts/serve-local.mjs --port 4180
-```
-
-不需要先运行 `npm install`。修改 `dist/index.html` 或 `dist/enhancements.js` 后刷新浏览器即可。
-
-首次启动会在项目目录创建 `data/requirements.sqlite`，按需求、任务、快照、Run、事件等多张表保存。这是本地单人工作区数据库，不会上传到云端；整个 `data/` 目录已加入 Git 忽略规则。浏览器已有的旧数据会在数据库为空时做可追溯迁移。若数据库与浏览器缓存不同，会先把两边状态写入备份键，再提示或按更新时间请你选择，不静默覆盖。
-
-可用 `GET /api/health` 检查本地服务状态。要把数据库放到其他目录，可通过环境变量 `WORKBENCH_DATA_DIR` 指定。
-
-### 数据库备份与恢复
-
-- 主数据库：`data/requirements.sqlite`；自动迁移/恢复前生成的数据库副本放在 `data/backups/`。备份整个 `data/` 目录即可保留主库和自动副本。
-- 日常可在页面点“数据备份与迁移 → 下载 JSON 备份”。正常连接数据库时下载的是包含多表数据的 v2 整库导出；数据库离线时才会退回下载浏览器缓存 v1。
-- v2 整库恢复只允许写入空数据库。导入 v2 文件时页面先预览；已有数据会被拒绝，不会覆盖。需要恢复时，先备份当前库，再用新的数据目录启动：
-
-  ```powershell
-  $env:WORKBENCH_DATA_DIR = "E:\\Ztree\\chuhaila-restore-test"
-  npm run dev
-  ```
-
-  打开新地址后，通过“数据备份与迁移 → 导入 JSON”选择 v2 文件并确认。确认恢复内容正确后，可退出服务，把主目录切换到新目录；旧目录保留作回滚备份。
-- v1 旧格式文件仍按 ID 合并导入，不会清空现有数据。v1 不是整库恢复文件。
-- 若页面看起来像“数据丢了”，先检查浏览器地址的主机名和端口：`localhost` 与 `127.0.0.1`、不同端口对应不同的浏览器 `localStorage`。数据库则取决于服务启动时的 `WORKBENCH_DATA_DIR`；确认页面连接的是预期服务，并检查启动日志显示的 SQLite 路径，不要先清理旧目录。
-
-### 本地 Agent Runner
-
-本地服务使用启动目录作为默认项目仓库；执行看板可改成另一个 Git 仓库目录。Runner 必须在服务之外的另一个终端启动。页面支持 Claude Code、Codex 和你自己添加的命令行 Agent。Claude Code 与 Codex 默认使用本机各自的登录状态；命令行里的 `claude` 要单独登录（Claude 桌面应用的登录不通用），在页面侧栏“设置（Agent 与密钥）”里点“登录 Claude Code”，或粘贴订阅令牌（`claude setup-token` 生成）/ API Key。设置页还能添加自定义 Agent、保存“拆分需求”用的模型接口 Key。这些密钥只保存在本地服务的 `data/agent-secrets.json`（不在数据库里，不进导出和备份，页面读不回来，Windows 上仅当前用户可读），只在启动对应 Agent 时交给那一个进程。
-
-```powershell
-# 终端 1：启动服务
-npm run dev
-
-# 终端 2：启动 Runner（默认自动按任务执行器选择 Claude Code 或 Codex）
-npm run runner
-```
-
-先确认页面中的 Agent 状态显示“可用”，再在“分配 AI”中选择“分配并执行”，或在执行看板选择多项后点击“执行所选 / 执行全部待执行”。可用性检查通过 `claude --version`、`codex --version` 和 Windows Codex 商店包检查完成。普通 Codex CLI 优先；若命令不在 PATH，Windows Runner 会动态查找 Codex 商店包并通过 Appx 身份启动。商店版的进度和结果使用 Runner 目录中的日志及完成标记文件。
-
-每项执行都在独立分支和 Git worktree 中运行，起点是项目目录当前 `HEAD`（不会复制原工作目录里的未提交更改）。分支名取自服务分配的 `wb/<任务号>-a<第几次>`，不合法或被占用时回退为 `workbench/<Run-ID>-<随机>`。执行类任务结束后，改动会在该分支上提交（`workbench: <需求标题>`）并作为 `branch` 产物上报，随后删除 worktree；你在项目目录里用 `git diff main..<分支>` 查看、`git merge <分支>` 合入，Runner 永远不动你的主分支和工作目录。分析任务不改文件，不留分支。Codex 使用 `codex exec --sandbox workspace-write`（分析为 `read-only`），不带任何“全部放行”参数；Claude Code 执行用 `acceptEdits`、分析用 `plan` 模式，不启用跳过权限。Runner 续租、上报进度/日志、结果、diff 和产物；运行详情自动刷新状态、时间线、心跳、错误、日志尾部和各次尝试。服务会回收超出租约的 Run 并将任务放回队列。
-
-便携路径、临时目录和调试选项：
-
-```powershell
-$env:WORKBENCH_RUNNER_API = "http://127.0.0.1:4179"
-$env:WORKBENCH_RUNNER_DIR = "E:\\path\\to\\runner-data"
-$env:WORKBENCH_REPOSITORY = "E:\\path\\to\\git-repository" # 可选；设置后覆盖页面的项目目录
-$env:CLAUDE_CLI = "claude" # 可选：覆盖可执行文件名/路径
-$env:CODEX_CLI = "codex"   # 可选：覆盖可执行文件名/路径
-npm run runner
-
-# 仅用于协议联调，不调用模型
-$env:WORKBENCH_RUNNER_ADAPTER = "fake"
-npm run runner
-```
-
-### AI 拆分提供方
-
-AI 拆分网关在本地服务端调用 Claude、OpenAI 或 DeepSeek；每家都需要配置对应的模型名和 API Key 环境变量。没有配置时可继续使用手动拆分或测试用假提供方。不要把密钥放到页面、JSON、需求上下文或 Git 中。
-
-```powershell
-$env:ANTHROPIC_API_KEY = "..."
-$env:ANTHROPIC_MODEL = "你的 Claude 模型 ID"
-$env:OPENAI_API_KEY = "..."
-$env:OPENAI_MODEL = "你的 OpenAI 模型 ID"
-$env:DEEPSEEK_API_KEY = "..."
-$env:DEEPSEEK_MODEL = "你的 DeepSeek 模型 ID"
-```
-
-配置后重启服务，可由本地 API 生成待审阅草稿；草稿确认前不会创建正式任务。模型名不内置默认值，以便按账号权限和可用模型自行指定。
-
-## 当前原型
-
-- 需求清单：新增、编辑、搜索、按模块/版本筛选、批量决策；每行有“删除”，工具栏有“删除所选”（删除会隐藏名下任务并终止其中正在执行的 Agent，变更记录保留）。
-- 决策状态：待讨论、保留、修改后保留、延后、不做（“不做”只是一种决策，不会删除需求）。
-- 终止：执行中的任务在看板、AI 协作任务和运行详情里都有“终止”，Agent 进程会被整个停掉，这次运行的改动、worktree 和分支一并丢弃，任务回到待执行。
-- 导入草稿：粘贴 Prompt/文本，或选择 JSON、TXT、Markdown、DOCX；先预览候选需求，再确认导入。简单编号列表和标题可自动拆成草稿，不会自动调用 AI。
-- AI 协作：为需求选择“只分配 / 分配并分析 / 分配并执行”；分析模板可以编辑。可将待执行任务交给本地 Claude Code 或 Codex。
-- 执行看板：任务按待澄清、待执行、执行中、待验收、已完成、阻塞分栏；可多选、批量派发或执行全部待执行任务。依赖未满足的任务会被跳过并说明原因。
-- Run 详情：显示阶段、进度、最后心跳、错误、日志尾部、事件时间线、diff/日志产物及历史尝试。
-- 状态保存：SQLite 关系表为主存储、localStorage 为浏览器缓存；保存失败时提示并回退到缓存，下次启动会比较更新时间并让你选择较新的缓存是否恢复。
-- 任务启动：冻结全局需求摘要、关联需求和任务说明为版本化上下文快照，同时追加运行记录；Runner 在独立 worktree 中调用真实本地 Agent。
-- 变更历史：本浏览器内记录需求和任务的变更。
-- JSON：整库导出和按 ID 合并导入；可以载入 15 条工具模块样例。
-
-## 数据与密钥
-
-当前主数据保存在项目目录 `data/requirements.sqlite`，只供本机服务使用。浏览器 `localStorage` 保留为缓存及冲突备份。清理项目目录、换电脑或重装前先下载 JSON 备份。状态机、Run、快照、验收和事件由服务端领域层处理；本地 Runner 可通过各自登录态调用 Claude Code / Codex。尚无共享数据库和账号系统。
-
-不要在浏览器页面、`localStorage`、需求导出 JSON 或 Git 文件中放模型 API Key。后续如需工作台直接调用模型，应增加服务端 API，由服务端从环境变量/密钥管理中读取 Key；外部 Agent 自带模型凭证时，工作台只需发放短时任务访问凭证，不需要获得 Agent 的模型 Key。
-
-## V1 待实现范围
-
-| 功能 | 验收要点 | 当前状态 |
+| 场景 | 适用人群 | Taskflow 能做什么 |
 | --- | --- | --- |
-| 粘贴 Prompt、文档、JSON 导入 | 先解析为待确认草稿；用户确认后才写入；重复 ID 跳过 | 已有本地原型；解析需人工核对 |
-| 执行看板 | 按状态分栏；显示负责人、需求和任务说明 | 已有本地原型；依赖和文件占用待补 |
-| 状态流转 | 只允许有效状态转换；阻塞必须有原因；完成需人工确认；记录事件时间 | 本地 API 服务端校验；还没有用户/Agent 权限认证 |
-| Agent 对接 | 定义任务读取、领取/认领、心跳/续租、成果提交和失败回报接口；先支持一个执行器 | 本地 Runner 与执行生命周期已实现；商店版 Codex 需在目标 Windows 桌面验收 |
-| AI 澄清与拆分 | 服务端调用模型并产出任务草稿；人确认后生成正式任务；记录模型和用量 | 已有服务端 Provider Gateway；仍需配置服务端 Key |
-| 共享状态 | 多人和 Agent 读写同一份任务、决策、依赖及成果 | 待实现；当前仅本机 SQLite 单用户 |
+| 把想法整理成可决策需求 | 独立产品负责人、创始人 | 粘贴 Prompt 或导入文档，形成需求清单；按版本筛选，决定保留、修改、延后或不做。 |
+| 把需求交给本地 AI 执行 | 个人开发者、AI 编程使用者 | 将需求拆成任务，交给本机 Claude Code、Codex 或自定义 CLI Agent；查看进度、日志、产物，再人工验收。 |
+| 试跑轻量 AI 协作流程 | 正在试用 Agent 的小团队 | 在一台受信任的机器上共享本地工作台状态；验证任务拆分、执行与验收流程。当前不是多人云协作服务，不支持多账号并发工作区。 |
 
-## 建议的状态机
+## 快速开始
 
-```text
-待澄清 → 待执行 → 执行中 → 待验收 → 已完成
-                 ↘ 阻塞 ↗
-待验收 → 待执行（验收不通过，需附修改意见）
+### 最短启动（只整理需求，不接 Agent）
+
+需要 Node.js 22.13+。无需数据库安装；页面静态资源不需要额外 npm 依赖。
+
+```powershell
+npm run dev
 ```
 
-每个任务还应记录负责人/执行器、输入上下文快照、依赖、涉及文件、验收标准、产出链接和变更事件。Agent 可更新进度、报告阻塞并提交成果；“已完成/已验收”由负责人确认。
+打开终端显示的地址（默认 <http://127.0.0.1:4179>），停止时按 `Ctrl+C`。第一次进入是空工作区，可点击“载入工具模块样例”添加 15 条样例，或粘贴 Prompt / 导入 JSON、TXT、Markdown、DOCX 需求。
 
-## 目录
+也可以用单条命令启动 Web + 本地 Runner：
 
-- `dist/index.html`：当前单页应用。
-- `scripts/serve-local.mjs`：本地静态服务和 API 启动入口。
-- `server/`：多表 SQLite、领域服务、状态机、兼容旧页面的状态适配和 HTTP API。
-- `data/requirements.sqlite`：首次运行时创建的本地数据库（Git 忽略）。
-- `tests/`：领域、迁移策略、本地 HTTP API 和生命周期测试。
-- `README.md`：本地运行说明与 V1 验收清单。
+```powershell
+npm run taskflow
+```
+
+该方式需要 Node.js 22.13+、Git，以及你准备使用并已登录的 Agent CLI（如 Claude Code / Codex）。第一次使用时，在设置里选择一个 Git 项目目录。若只手动管理需求与任务，不需要 Agent CLI，也不需要模型 API Key。
+
+### 模型/API 配置（可选）
+
+只有使用模型驱动的需求分析或 AI 拆分时才需要模型服务 Key；在 Taskflow 设置页配置，或通过本地服务环境变量配置。当前支持 Claude、OpenAI、DeepSeek 的模型网关。手动拆分、导入需求、浏览看板不依赖模型 Key。不要把密钥写入需求正文、导出 JSON 或 Git 文件。
+
+### Windows Web 便携包（可选）
+
+在开发仓库中运行 `npm run pack:taskflow`，生成 `release/Taskflow-Web-0.1.0.zip`。解压后运行 `start-taskflow.cmd`。目标电脑需安装 Node.js 22.13+、Git 和需要使用的 Agent CLI；无需在目标电脑执行 `npm install`。当前也保留 Electron 桌面测试方式，见“配置、版本与路线图”。
+
+## 使用示例：从需求到交付
+
+假设你要给工作台增加“需求导入后先预览，确认后才写入；遇到重复 ID 跳过”的能力：
+
+1. 在需求清单里粘贴这段描述，或导入文档；解析出的内容先作为待确认需求，不会自动覆盖现有记录。
+2. 补充验收标准，例如“预览能显示新增/重复项；确认后只写入新增项；取消后数据不变”，再决定目标版本和需求状态。
+3. 在 AI 协作区为需求创建任务。可以手动给出拆分和依赖；启用模型拆分时，先检查草稿再确认，不会直接把模型输出当成正式任务。
+4. 在执行看板启动任务。Runner 为代码任务建立独立 Git worktree/分支并调用本地 Agent；页面记录 Run 状态、日志和交付产物。
+5. 检查分支、diff、日志与验收标准。通过后将任务标记完成，再由你决定是否把产物分支合并进项目主分支；不通过则写明原因退回。
+
+这条链路用于演示当前单机原型的工作方式。Agent 的实际可用性取决于本机 CLI 登录、项目仓库状态与模型服务配置；模型拆分/网关目前仍需用真实账户和 Key 做目标环境验证。
+
+## 差异与限制
+
+### 和把任务散落在文档、聊天窗口里的方式相比
+
+- 需求、任务、依赖、运行记录和验收结果放在一个本地 SQLite 工作区中，减少上下文在不同对话间丢失。
+- Agent 在隔离的 Git worktree/分支里执行；Taskflow 不直接改动主工作目录和主分支，结果可检查后再合并。
+- 支持本地运行，不必把项目文件交给云端工作台；若主动使用模型网关，所选需求上下文会发送给对应模型服务。
+
+### 当前限制
+
+- 当前是 **0.1.0 本地预览版 / 单人工作区**，没有账号、权限管理、云端同步或多人同时编辑。
+- Web+Runner 需要本机 Node.js、Git 和 Agent CLI；Agent 自身的安装、登录与额度由用户管理。
+- 模型拆分只生成待审阅草稿。模型供应商接入虽有网关和测试，但真实账号端到端验证仍需用户配置 Key 后完成。
+- Windows 便携包可生成；Electron 桌面版仍属测试方式。安装包当前未代码签名，Windows 可能提示未知发布者。
+- 不提供 Agent 产物自动合并；验收与合并由用户把关。
+
+## 参与方式
+
+- **反馈入口：**[GitHub Issues](https://github.com/Phoenix-deeplot/Taskflow/issues)。请描述复现步骤、预期与实际结果、操作系统和 Node.js 版本；提交日志前先移除 Key、令牌和私有业务数据。
+- **代码贡献：**先说明要解决的问题，再提交尽量聚焦的改动；涉及数据/状态流转时，请附测试或可复现的验收步骤。当前没有单独的 CONTRIBUTING 指南。
+- **适合先做的小任务：**补一张脱敏后的真实界面截图；补充一个可重复的端到端使用案例；在另一台干净 Windows 环境验证 Web 便携包与 Agent CLI 启动。
+- 修改后可运行 `npm test` 执行项目测试。
+
+## 基础信息
+
+| 项目 | 当前信息 |
+| --- | --- |
+| 版本 | `0.1.0`（本地预览构建；以 `package.json` 为准） |
+| 许可证 | 仓库暂未提供 LICENSE 文件，授权和再分发范围尚未声明；请勿据此假定可以再分发。 |
+| 数据库 | 默认本地 SQLite：开发时为项目 `data/requirements.sqlite`；便携包默认在 Windows 用户数据目录 `%LOCALAPPDATA%\\Taskflow\\data`。 |
+| 数据备份 | 页面可下载 JSON 整库备份。日常迁移或恢复前先备份；详细规则见下文。 |
+| 源码结构 | 页面在 `dist/`；本地服务在 `scripts/serve-local.mjs`；API/领域服务在 `server/`；Agent Runner 在 `runner/`；测试在 `tests/`。 |
+
+### 配置说明
+
+开发时可用环境变量调整本地路径。PowerShell 示例：
+
+```powershell
+$env:WORKBENCH_DATA_DIR = "$env:TEMP\\taskflow-data"
+$env:WORKBENCH_RUNNER_DIR = "$env:TEMP\\taskflow-runner"
+npm run taskflow
+```
+
+Runner 单独启动时还可设置 `WORKBENCH_RUNNER_API`、`WORKBENCH_REPOSITORY`、`CLAUDE_CLI`、`CODEX_CLI`。模型网关可使用 `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL`、`OPENAI_API_KEY` / `OPENAI_MODEL` 或 `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL`。密钥只应保存在本地服务配置中，不要提交到仓库。
+
+### 数据备份与恢复
+
+- 数据库主文件位于 `WORKBENCH_DATA_DIR` 指定目录（默认开发目录为项目 `data/`）；备份前先正常停止服务并复制整个数据目录。
+- 页面提供“数据备份与迁移 → 下载 JSON 备份”。v2 整库恢复仅允许导入空数据库；恢复前先备份现有数据库，再使用新的 `WORKBENCH_DATA_DIR` 启动服务，预览并确认导入。
+- 旧 v1 JSON 按 ID 合并，不是整库恢复文件，不会清空现有数据。
+- 不要同时让两个工作台实例写入同一个 SQLite 文件。
+
+### 桌面版与版本路线图
+
+桌面版测试入口：
+
+```powershell
+npm install
+npm run desktop
+```
+
+重新构建 Windows 安装包使用 `npm run pack:win`。Electron 依赖需要先安装；当前构建尚未代码签名。
+
+路线图按“验证之后再扩展”推进，以下是方向，不代表已实现或承诺发布日期：
+
+| 阶段 | 目标 |
+| --- | --- |
+| 当前：0.1 本地预览 | 稳定需求→任务→本地 Runner→人工验收；完善备份恢复与 Windows 启动体验。 |
+| 后续：团队协作验证 | 在单人流程稳定后，再评估共享状态、账号/权限、多人并发和跨机器 Runner。 |
+| 后续：扩展连接 | 根据真实使用反馈增加 Agent/工具连接与自动化；先验证需求，不预设技术方案或上线时间。 |
+
+### 相关文档
+
+- [功能介绍页](./dist/cover.html)
+- [单人版验收用例](./docs/单人版-验收用例.md)
+- [数据契约与状态机](./docs/V1-单人版-数据契约与状态机.md)
+- [任务分配方案](./docs/V2-任务分配.md)

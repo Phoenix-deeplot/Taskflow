@@ -1,13 +1,47 @@
 {
-  "name": "chuhaila-requirements-workbench",
+  "name": "taskflow",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.13" },
+  "engines": {"node": ">=22.13"},
+  "main": "desktop/main.mjs",
+  "productName": "Taskflow",
   "scripts": {
+    "desktop": "electron desktop/main.mjs",
+    "taskflow": "node scripts/start-taskflow.mjs",
+    "pack:taskflow": "node scripts/package-taskflow.mjs",
+    "pack:win": "electron-builder --win nsis --x64",
+    "pack:dir": "electron-builder --dir --win",
     "dev": "node scripts/serve-local.mjs",
     "start": "node scripts/serve-local.mjs",
     "runner": "node scripts/run-runner.mjs",
     "test": "node --test \"tests/**/*.test.mjs\""
+  },
+  "devDependencies": {
+    "electron": "^44.9.1",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.chuhaila.requirements-workbench",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "desktop/**",
+      "server/**",
+      "runner/**",
+      "dist/**"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   }
 }

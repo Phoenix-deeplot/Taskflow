@@ -44,7 +44,7 @@ function describeEvent(event) {
  * `kit` is the shared toolbox created inside createWorkbench.
  */
 export function createBatchOps(kit) {
-  const { db, tx, emit, clock, workspaceId, requireRunRow, requireTaskRow, requireRequirementRow, toRun, toTask, toEvent, toRequirement, createTask, dispatchTask, listArtifacts } = kit;
+  const { db, tx, emit, clock, workspaceId, requireRunRow, requireTaskRow, requireRequirementRow, toRun, toTask, toEvent, toRequirement, createTask, dispatchTask, listArtifacts, startTask, submitResult, acceptTask } = kit;
 
   // ---------- analysis tasks ----------
   function createAnalysisTask(requirementId, { template, executorType, provider = "", assignee = "" } = {}) {
@@ -57,6 +57,60 @@ export function createBatchOps(kit) {
         requirementId, kind: "analysis", taskText, acceptance: ANALYSIS_ACCEPTANCE, provider, assignee,
         executorType: executorType ?? "manual_handoff",
       });
+    });
+  }
+
+  /**
+   * A model's analysis, recorded the same way an Agent's is: an analysis task with a finished run waiting for a person
+   * to confirm it. (The model call itself happens outside the database; this only stores its answer.)
+   */
+  function recordModelAnalysis(requirementId, { provider, model = "", usage = {}, inputHash = "", summary, structured } = {}) {
+    if (!nonEmpty(provider)) throw invalid("需要模型提供方的名称");
+    if (!nonEmpty(summary)) throw invalid("分析结果不能为空");
+    return tx(() => {
+      const task = createAnalysisTask(requirementId, { executorType: `model:${provider}`, provider, assignee: `${provider} 模型` });
+      const started = startTask(task.id);
+      const submitted = submitResult(started.run.id, {
+        summary,
+        evidence: [
+          { kind: "model", name: `${provider}${model ? ` · ${model}` : ""}`, ref: inputHash, usage },
+          ...(structured ? [{ kind: "analysis-json", name: "结构化分析", data: structured }] : []),
+        ],
+      });
+      emit("task", task.id, "analysis.model_recorded", { provider, model, usage, inputHash }, started.run.id);
+      return { task: submitted.task, run: submitted.run };
+    });
+  }
+
+  /** A failed model call leaves a trace, so the history explains why there is no analysis. */
+  function recordAnalysisFailure(requirementId, { provider = "", model = "", code = "PROVIDER_ERROR", message = "" } = {}) {
+    return tx(() => {
+      requireRequirementRow(requirementId);
+      emit("requirement", requirementId, "analysis.model_failed", { provider, model, code, message });
+    });
+  }
+
+  /**
+   * The step after a person has read an analysis: confirm it (the analysis task is accepted) and create the task that
+   * carries out what was agreed, with the (possibly edited) text. Dispatching it is a separate, ordinary call.
+   */
+  function assignFromAnalysis(analysisTaskId, { taskText, acceptance, executorType, provider = "", assignee = "", note = "" } = {}) {
+    if (!nonEmpty(taskText)) throw invalid("请填写要分配的任务说明");
+    if (taskText.length > MAX_ANALYSIS_TEXT) throw invalid(`任务说明太长（最多 ${MAX_ANALYSIS_TEXT} 字）`);
+    return tx(() => {
+      const analysis = requireTaskRow(analysisTaskId);
+      if (analysis.kind !== "analysis") throw invalid("只能从分析任务确认并分配");
+      if (analysis.status !== "review") throw conflict(`分析任务的状态是“${analysis.status}”，只有“待验收”的分析可以确认`);
+      if (!analysis.requirement_id) throw invalid("这条分析没有关联需求");
+      if (requireRequirementRow(analysis.requirement_id).deleted_at) throw conflict("需求已删除，不能再分配");
+      const accepted = acceptTask(analysisTaskId, { note: nonEmpty(note) ? note : "分析已确认，按此分配" });
+      const task = createTask({
+        requirementId: analysis.requirement_id, kind: "execution", taskText: taskText.trim(),
+        acceptance: Array.isArray(acceptance) && acceptance.length ? acceptance : ["说明实际完成内容、关键依据和未解决问题"],
+        provider, assignee, executorType: executorType ?? "manual_handoff",
+      });
+      emit("task", analysisTaskId, "analysis.assigned", { taskId: task.id, executorType: task.executorType });
+      return { analysisTask: accepted.task, task };
     });
   }
 
@@ -199,5 +253,8 @@ export function createBatchOps(kit) {
     };
   }
 
-  return { createAnalysisTask, dispatchTasks, dispatchAll, listSettings, getSetting, setSetting, clearSetting, getRunDetail, DEFAULT_ANALYSIS_TEMPLATE };
+  return {
+    createAnalysisTask, recordModelAnalysis, recordAnalysisFailure, assignFromAnalysis, dispatchTasks, dispatchAll,
+    listSettings, getSetting, setSetting, clearSetting, getRunDetail, DEFAULT_ANALYSIS_TEMPLATE,
+  };
 }

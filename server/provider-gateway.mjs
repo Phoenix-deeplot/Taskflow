@@ -133,9 +133,11 @@ export function createProviderGateway({ env = process.env, fetchImpl = globalThi
           };
         } else {
           headers = { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` };
+          // DeepSeek's JSON mode guarantees valid JSON but knows nothing about our schema, so the schema goes into the prompt.
+          const guide = `${system}\n\n请只输出一个 JSON 对象，字段名和结构必须严格符合下面的 JSON Schema：\n${JSON.stringify(jsonSchema)}`;
           payload = {
             model, max_tokens: 4096,
-            messages: [{ role: "system", content: system }, { role: "user", content: JSON.stringify(input) }],
+            messages: [{ role: "system", content: guide }, { role: "user", content: JSON.stringify(input) }],
             response_format: { type: "json_object" },
           };
         }

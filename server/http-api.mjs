@@ -4,7 +4,9 @@ import { commitLegacyImport, previewLegacyImport } from "./legacy-import.mjs";
 import { previewRestore, restoreFromExport } from "./restore.mjs";
 import { createSecretStore, launchConfigFor, providerEnvironment } from "./agent-config.mjs";
 import { createProviderGateway } from "./provider-gateway.mjs";
-import { proposeSplit } from "./split.mjs";
+import { analyzeWithModel } from "./analyze.mjs";
+import { readProjectOverview } from "./project-overview.mjs";
+import { assessSplit, evaluateSplit, proposeSplit } from "./split.mjs";
 import { WorkbenchError } from "./util.mjs";
 
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
@@ -42,8 +44,34 @@ export function createApiHandler({
   const workbench = injectedWorkbench || createWorkbench(db);
   // Keys set on the settings page. The gateway reads them (before the process environment) when it calls a model.
   const secretStore = injectedSecretStore || createSecretStore();
-  const providerGateway = injectedProviderGateway || createProviderGateway({ env: providerEnvironment(secretStore) });
+  // WORKBENCH_DEEPSEEK_URL / _OPENAI_URL / _CLAUDE_URL point a provider at a compatible relay or a local test server.
+  // (Deliberately not ANTHROPIC_BASE_URL and friends: other tools set those for their own purposes.)
+  const endpoints = Object.fromEntries(["claude", "openai", "deepseek"]
+    .map((name) => [name, process.env[`WORKBENCH_${name.toUpperCase()}_URL`]])
+    .filter(([, value]) => { try { return Boolean(value) && /^https?:$/.test(new URL(value).protocol); } catch { return false; } }));
+  const providerGateway = injectedProviderGateway || createProviderGateway({ env: providerEnvironment(secretStore), endpoints });
   const customAgents = () => workbench.getSetting("agents.custom") || [];
+
+  // Model engines that can analyse and split: a provider counts only when both its key and its model name are set.
+  const MODEL_ENGINES = [["deepseek", "DeepSeek", "DEEPSEEK"], ["openai", "OpenAI", "OPENAI"], ["claude", "Claude", "ANTHROPIC"]];
+  const providerEnv = providerEnvironment(secretStore);
+  const modelEngines = () => MODEL_ENGINES
+    .filter(([, , prefix]) => providerEnv[`${prefix}_API_KEY`] && providerEnv[`${prefix}_MODEL`])
+    .map(([name, label, prefix]) => ({ name, label, model: providerEnv[`${prefix}_MODEL`] }));
+  function modelProvider(engine) {
+    const configured = modelEngines().find((entry) => entry.name === engine);
+    if (!configured) throw new WorkbenchError("NO_MODEL", "还没有配置这个模型的 Key 和模型名：到“设置”里填写，或改用 Agent。", 400);
+    return providerGateway.get(configured.name);
+  }
+  const projectOverviewFor = (body) => (body?.includeProject === false ? null : readProjectOverview(workbench.getSetting("project.path") || projectDirectory));
+  const withEvaluation = (draft) => ({ ...draft, evaluation: evaluateSplit(draft.tasks) });
+  /** A proposal being edited may be half-finished, so it is judged as it stands, not rejected. */
+  const looseTasks = (raw) => (Array.isArray(raw) ? raw.slice(0, 50) : []).map((item) => ({
+    key: typeof item?.key === "string" ? item.key : "", taskText: typeof item?.taskText === "string" ? item.taskText : "",
+    acceptance: Array.isArray(item?.acceptance) ? item.acceptance.filter((x) => typeof x === "string" && x.trim()) : [],
+    fileScope: Array.isArray(item?.fileScope) ? item.fileScope.filter((x) => typeof x === "string" && x.trim()) : [],
+    dependsOn: Array.isArray(item?.dependsOn) ? item.dependsOn.filter((x) => typeof x === "string" && x.trim()) : [],
+  }));
 
   /** Built-in and custom agents with what the page needs to show: can it run now, and what is missing. */
   async function describeAgents() {
@@ -129,6 +157,31 @@ export function createApiHandler({
         for (const gone of before.filter((old) => !saved.some((agent) => agent.id === old.id))) secretStore.clear(`custom:${gone.id}`);
         send(response, 200, { customAgents: saved });
         return true;
+      }
+      // Which models can analyse and split right now, and what to use by default: a model when one is set up, else an Agent.
+      if (pathname === "/api/analysis/engines" && method === "GET") {
+        const models = modelEngines();
+        send(response, 200, { models, defaultEngine: models[0]?.name ?? "agent" });
+        return true;
+      }
+      if (pathname === "/api/split/evaluate" && method === "POST") {
+        const body = await readBody(request);
+        send(response, 200, evaluateSplit(looseTasks(body.tasks)));
+        return true;
+      }
+      if (parts[1] === "split-drafts" && parts.length >= 3) {
+        const id = parseId(parts[2]);
+        if (parts.length === 3 && method === "GET") { send(response, 200, withEvaluation(workbench.getSplitDraft(id))); return true; }
+        if (parts.length === 3 && method === "PUT") {
+          const body = await readBody(request);
+          send(response, 200, withEvaluation(workbench.updateSplitDraft(id, { tasks: body.tasks }, { expectedRevision: body.expectedRevision })));
+          return true;
+        }
+        if (parts.length === 4 && method === "POST") {
+          const body = await readBody(request);
+          if (parts[3] === "confirm") { send(response, 200, workbench.confirmSplitDraft(id, { expectedRevision: body.expectedRevision, acceptStale: body.acceptStale === true })); return true; }
+          if (parts[3] === "discard") { send(response, 200, workbench.discardSplitDraft(id, { reason: body.reason || "" })); return true; }
+        }
       }
       if (pathname === "/api/analysis-template" && method === "GET") {
         send(response, 200, { template: workbench.DEFAULT_ANALYSIS_TEMPLATE });
@@ -220,6 +273,37 @@ export function createApiHandler({
           return true;
         }
       }
+      // Analyse with a model: the answer is stored as an analysis task waiting for a person to confirm it (record: false
+      // only returns the text, for filling in a field without creating a task).
+      if (parts[1] === "requirements" && parts.length === 5 && parts[3] === "analysis" && parts[4] === "model" && method === "POST") {
+        const id = parseId(parts[2]);
+        const body = await readBody(request);
+        const provider = modelProvider(body.engine);
+        const project = projectOverviewFor(body);
+        const result = await analyzeWithModel(workbench, id, provider, { project, timeoutMs: body.timeoutMs });
+        const shown = { text: result.text, structured: result.structured, model: result.model, usage: result.usage, projectOmitted: project?.omitted ?? null, projectUsed: Boolean(project) };
+        if (body.record === false) { send(response, 200, shown); return true; }
+        const recorded = workbench.recordModelAnalysis(id, { provider: result.provider, model: result.model, usage: result.usage, inputHash: result.inputHash, summary: result.text, structured: result.structured });
+        send(response, 201, { ...recorded, ...shown });
+        return true;
+      }
+      // Does this need splitting at all? "No" is a normal answer; a proposal comes back as a draft with its evaluation.
+      if (parts[1] === "requirements" && parts.length === 5 && parts[3] === "split" && parts[4] === "assess" && method === "POST") {
+        const body = await readBody(request);
+        const provider = modelProvider(body.engine);
+        const project = projectOverviewFor(body);
+        send(response, 200, { ...(await assessSplit(workbench, parseId(parts[2]), provider, { maxTasks: body.maxTasks, timeoutMs: body.timeoutMs, project })), projectOmitted: project?.omitted ?? null });
+        return true;
+      }
+      if (parts[1] === "requirements" && parts.length === 4 && parts[3] === "split-drafts") {
+        const id = parseId(parts[2]);
+        if (method === "GET") { send(response, 200, workbench.listSplitDrafts({ requirementId: id }).map(withEvaluation)); return true; }
+        if (method === "POST") {
+          const body = await readBody(request);
+          send(response, 201, withEvaluation(workbench.createSplitDraft(id, { tasks: body.tasks })));
+          return true;
+        }
+      }
       if (parts[1] === "requirements" && parts.length === 5 && parts[3] === "split" && parts[4] === "propose" && method === "POST") {
         const body = await readBody(request);
         const provider = providerGateway.get(body.provider);
@@ -233,6 +317,7 @@ export function createApiHandler({
         if (parts.length === 4 && method === "POST") {
           const body = await readBody(request);
           if (parts[3] === "dispatch") { send(response, 202, workbench.dispatchTask(id, body)); return true; }
+          if (parts[3] === "assign-from-analysis") { send(response, 201, workbench.assignFromAnalysis(id, body)); return true; }
           if (parts[3] === "start") { send(response, 200, workbench.startTask(id, body)); return true; }
           if (parts[3] === "transition") { send(response, 200, workbench.transitionTask(id, body.target, body)); return true; }
           if (parts[3] === "accept") { send(response, 200, workbench.acceptTask(id, body)); return true; }

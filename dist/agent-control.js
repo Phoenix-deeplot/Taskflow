@@ -165,6 +165,8 @@
     if (!requirement) return "";
     return ["—— 需求 ——", `需求：${requirement.title}`, `模块：${requirement.module || "未分类"}`, `目标版本：${requirement.targetVersion}`, `当前决策：${requirement.decision}${requirement.decisionNote ? `（${requirement.decisionNote}）` : ""}`, `说明：${requirement.description || "暂无"}`].join("\n");
   }
+  // Other page scripts (the analysis review) build execution tasks the same way.
+  window.WorkbenchAgentText = { EXECUTION_TEMPLATE, requirementDetails };
   let assigning = false;
   async function performAssign(mode) {
     if (assigning) return; // a double click must not create two tasks
