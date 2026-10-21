@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f4ef">
+  <meta name="description" content="Taskflow：把产品需求、本地 AI Agent 与可验证交付连接起来的本机工作台。功能介绍、快速上手、Windows 安装包与 Web 便携版下载。">
+  <meta property="og:title" content="Taskflow — 让 AI 协作有上下文、有状态、有交付">
+  <meta property="og:description" content="从一条需求，到一条可验证的执行链。数据留在你自己的电脑。">
+  <title>Taskflow — 让 AI 协作有上下文、有状态、有交付</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%233d8178'/%3E%3Ctext x='16' y='22.5' font-family='Georgia,serif' font-size='19' font-weight='700' text-anchor='middle' fill='%23f8f7f0'%3ET%3C/text%3E%3C/svg%3E">
+  <style>
+    :root {
+      --paper: #f5f4ef;
+      --paper-deep: #eeede5;
+      --ink: #1e2c32;
+      --muted: #5f6d71;
+      --line: #dcded7;
+      --navy: #1d3944;
+      --navy-2: #294c57;
+      --teal: #3d8178;
+      --mint: #dbe9df;
+      --gold: #c18a4d;
+      --white: #fffefa;
+      --shadow: 0 24px 70px rgba(31, 52, 57, .11);
+      --serif: Georgia, "Songti SC", "Noto Serif SC", serif;
+      --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+      --mono: ui-monospace, "Cascadia Mono", Consolas, "SFMono-Regular", monospace;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html { scroll-behavior: smooth; scroll-padding-top: 16px; }
+    body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.7 var(--sans); }
+    a { color: inherit; text-decoration: none; }
+    button { font: inherit; }
+    a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--teal); outline-offset: 3px; border-radius: 3px; }
+    code { font: 13px/1.5 var(--mono); padding: 1px 6px; border-radius: 3px; background: #e8eae2; color: var(--navy); overflow-wrap: anywhere; }
+    .ui { display: inline-block; padding: 0 6px; border-radius: 3px; background: var(--mint); color: #2c675d; font-weight: 650; font-size: .93em; line-height: 1.55; }
+    .wrap { width: min(1160px, calc(100% - 48px)); margin: 0 auto; }
+    .top { height: 76px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(30,44,50,.11); }
+    .brand { display: inline-flex; align-items: center; gap: 11px; font-size: 15px; font-weight: 750; letter-spacing: .02em; }
+    .brand-mark { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px 10px 10px 3px; color: #f8f7f0; background: var(--teal); font: 700 15px var(--serif); }
+    .brand small { display: block; color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; }
+    .nav { display: flex; align-items: center; gap: 30px; color: #4f5f62; font-size: 14px; }
+    .nav a:hover { color: var(--teal); }
+    .nav .nav-cta { color: var(--white); background: var(--navy); border-radius: 5px; padding: 9px 16px; }
+    .nav .nav-cta:hover { background: var(--teal); color: white; }
+    .menu-toggle { display: none; border: 1px solid var(--line); background: transparent; color: var(--ink); padding: 7px 10px; border-radius: 5px; }
+
+    .hero { padding: 78px 0 88px; display: grid; grid-template-columns: 1fr 1.02fr; align-items: center; gap: 50px; }
+    .eyebrow { color: var(--teal); font-size: 11px; font-weight: 800; letter-spacing: .17em; text-transform: uppercase; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { max-width: 610px; margin: 17px 0 20px; font: 500 clamp(42px, 5.3vw, 66px)/1.11 var(--serif); letter-spacing: -.045em; }
+    h1 em { color: var(--teal); font-style: normal; }
+    .hero-copy { max-width: 520px; color: #526164; font-size: 16px; line-height: 1.9; }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 11px; align-items: center; margin-top: 29px; }
+    .button { display: inline-flex; align-items: center; gap: 10px; padding: 13px 20px; border: 1px solid var(--navy); border-radius: 5px; color: white; background: var(--navy); font-size: 14px; font-weight: 700; transition: .18s ease; }
+    .button:hover { transform: translateY(-2px); background: var(--teal); border-color: var(--teal); }
+    .button.secondary { color: var(--navy); background: transparent; border-color: #c9ccc3; }
+    .button.secondary:hover { color: var(--teal); border-color: var(--teal); background: transparent; }
+    .fineprint { margin-top: 18px; color: #758280; font-size: 13px; }
+    .hero-visual { position: relative; min-height: 420px; display: grid; place-items: center; }
+    .orb { position: absolute; width: 355px; height: 355px; border-radius: 50%; background: #e5e9dc; right: 7%; top: 5%; }
+    .orb:after { content: ""; position: absolute; width: 170px; height: 170px; border: 1px solid rgba(61,129,120,.25); border-radius: 50%; right: -27px; top: 62px; }
+    .workflow-card { z-index: 1; position: relative; width: min(440px, 100%); padding: 22px; border: 1px solid #e7e8df; border-radius: 10px; background: var(--white); box-shadow: var(--shadow); transform: rotate(-1deg); }
+    .window-bar { display: flex; align-items: center; gap: 5px; padding-bottom: 15px; border-bottom: 1px solid #eceee7; }
+    .window-bar i { width: 7px; height: 7px; border-radius: 50%; background: #c6cbc3; }
+    .window-bar span { margin-left: 8px; color: #7a8987; font-size: 10px; letter-spacing: .08em; }
+    .wf-label { display: flex; align-items: center; justify-content: space-between; margin: 17px 0 10px; color: #6b7a77; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
+    .live { display: inline-flex; gap: 6px; align-items: center; color: var(--teal); font-size: 11px; letter-spacing: 0; text-transform: none; }
+    .live:before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #56a181; box-shadow: 0 0 0 3px #56a18120; }
+    .req-box { padding: 14px 15px; border: 1px solid #e9ebe5; border-radius: 6px; background: #fbfbf7; }
+    .req-box small { color: var(--teal); font-size: 10px; font-weight: 750; letter-spacing: .06em; }
+    .req-box strong { display: block; margin: 5px 0 3px; font-size: 14px; }
+    .req-box p { margin: 0; color: #6f7c7a; font-size: 12px; }
+    .wf-line { display: flex; align-items: center; gap: 11px; padding: 10px 9px; border-left: 1px dashed #a6c2b5; margin-left: 21px; }
+    .wf-num { width: 22px; height: 22px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 50%; color: #2d7469; background: #e5f0e9; font: 11px var(--serif); }
+    .wf-line strong { display: block; font-size: 12px; }
+    .wf-line small { display: block; color: #7a8683; font-size: 11px; }
+    .wf-status { margin-left: auto; color: #7b8a81; font-size: 11px; white-space: nowrap; }
+    .wf-status.done { color: var(--teal); }
+    .wf-foot { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #eceee7; padding-top: 13px; margin-top: 7px; color: #7b8682; font-size: 11px; }
+    .wf-foot b { color: var(--navy); font-weight: 650; }
+    .float-note { z-index: 2; position: absolute; right: -6px; bottom: 23px; padding: 10px 14px; background: var(--navy); color: white; border-radius: 5px; box-shadow: 0 10px 26px #193c5228; font-size: 11px; transform: rotate(2deg); }
+    .float-note span { color: #add1c4; }
+
+    .proofbar { padding: 23px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+    .proof { display: flex; align-items: center; justify-content: center; gap: 11px; color: #5f6d6c; font-size: 13.5px; }
+    .proof b { color: var(--navy); font: 500 22px var(--serif); }
+    .section { padding: 104px 0; }
+    .section-head { max-width: 680px; margin-bottom: 42px; }
+    .section-head h2 { margin: 12px 0; font: 500 clamp(32px, 4vw, 45px)/1.2 var(--serif); letter-spacing: -.035em; }
+    .section-head p { color: var(--muted); font-size: 15px; line-height: 1.85; }
+    .contrast { background: var(--navy); color: #f5f5ed; }
+    .contrast .section-head p { color: #c2cdc9; }
+    .contrast .eyebrow { color: #9bc9b4; }
+    .pain-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .pain { min-height: 210px; padding: 24px; border: 1px solid #ffffff20; border-radius: 6px; background: #ffffff08; }
+    .pain-no { color: #94c0ae; font: 14px var(--serif); }
+    .pain h3 { margin: 26px 0 9px; font: 500 20px var(--serif); }
+    .pain p { margin: 0; color: #c2cdc9; font-size: 13.5px; line-height: 1.8; }
+    .features { display: grid; grid-template-columns: repeat(2, 1fr); border-top: 1px solid var(--line); }
+    .feature { min-height: 200px; display: grid; grid-template-columns: 44px 1fr; gap: 16px; padding: 27px 27px 30px 0; border-bottom: 1px solid var(--line); }
+    .feature:nth-child(odd) { border-right: 1px solid var(--line); padding-right: 33px; }
+    .feature:nth-child(even) { padding-left: 33px; }
+    .feature-icon { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid #c7d9cf; border-radius: 50%; color: var(--teal); font: 15px var(--serif); }
+    .feature h3 { margin: 2px 0 8px; font-size: 16px; }
+    .feature p { max-width: 470px; margin: 0; color: var(--muted); font-size: 14px; line-height: 1.85; }
+    .tag { display: inline-block; margin-top: 13px; padding: 3px 8px; border-radius: 3px; color: #46705f; background: #e4eee6; font-size: 11.5px; }
+    .tag.later { color: #7d6238; background: #f4ecdc; }
+    .tag.experimental { color: #4b6878; background: #e8eef0; }
+
+    .steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, 1fr); border-top: 1px solid var(--line); }
+    .step { display: grid; grid-template-columns: 44px 1fr; gap: 16px; padding: 28px 28px 30px 0; border-bottom: 1px solid var(--line); }
+    .step:nth-child(odd) { border-right: 1px solid var(--line); padding-right: 34px; }
+    .step:nth-child(even) { padding-left: 34px; }
+    .step-no { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 50%; background: var(--navy); color: #f5f4ef; font: 15px var(--serif); }
+    .step h3 { margin: 3px 0 8px; font-size: 17px; }
+    .step p { margin: 0 0 8px; color: var(--muted); font-size: 14px; line-height: 1.9; }
+    .step p:last-child { margin-bottom: 0; }
+    .map { margin-top: 38px; padding: 26px 28px; border: 1px solid var(--line); border-radius: 8px; background: var(--white); }
+    .map h3 { margin: 0 0 14px; font: 500 20px var(--serif); }
+    .map-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 34px; margin: 0; }
+    .map-list div { display: grid; grid-template-columns: 8.5em 1fr; gap: 12px; padding: 9px 0; border-bottom: 1px solid #ecede6; font-size: 13.5px; }
+    .map-list dt { color: var(--navy); font-weight: 650; }
+    .map-list dd { margin: 0; color: var(--muted); }
+
+    .flow-section { background: var(--paper-deep); }
+    .flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0; position: relative; }
+    .flow:before { content: ""; height: 1px; background: #b8c8bd; position: absolute; top: 20px; left: 7%; right: 7%; }
+    .flow-step { position: relative; padding: 0 15px; text-align: center; }
+    .flow-dot { position: relative; z-index: 1; width: 40px; height: 40px; margin: 0 auto 15px; display: grid; place-items: center; border-radius: 50%; border: 1px solid #9bb8a7; color: var(--teal); background: var(--paper-deep); font: 14px var(--serif); }
+    .flow-step h3 { margin: 0 0 6px; font-size: 15px; }
+    .flow-step p { margin: 0 auto; max-width: 170px; color: var(--muted); font-size: 13px; line-height: 1.75; }
+
+    .dl-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+    .dl-card { display: flex; flex-direction: column; padding: 28px; border: 1px solid var(--line); border-radius: 8px; background: var(--white); box-shadow: 0 12px 34px #1f34390a; }
+    .dl-card.primary { border-color: #b7d0c3; box-shadow: var(--shadow); }
+    .dl-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+    .dl-card h3 { margin: 0 0 6px; font: 500 24px var(--serif); }
+    .dl-meta { margin: 0; color: var(--muted); font-size: 13px; }
+    .dl-list { margin: 18px 0 20px; padding: 0; list-style: none; color: #44575a; font-size: 14px; line-height: 1.8; }
+    .dl-list li { position: relative; padding-left: 16px; }
+    .dl-list li:before { content: "·"; position: absolute; left: 3px; color: var(--teal); font-weight: 800; }
+    .dl-steps { margin: 0 0 22px; padding: 14px 16px; border-radius: 6px; background: #f3f4ee; color: #44575a; font-size: 13.5px; line-height: 1.85; }
+    .dl-steps b { color: var(--navy); }
+    .dl-actions { margin-top: auto; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .dl-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .dl-size { color: #758280; font-size: 13px; }
+    .notice { margin-top: 22px; padding: 14px 18px; border-left: 3px solid var(--gold); border-radius: 0 6px 6px 0; background: #f6f0e2; color: #6c5330; font-size: 13.5px; line-height: 1.85; }
+    .notice.info { border-left-color: var(--teal); background: #e9f1ea; color: #355b50; }
+
+    .architecture { display: grid; grid-template-columns: 1fr 1.2fr; gap: 55px; align-items: center; }
+    .architecture h2 { margin: 11px 0 14px; font: 500 clamp(32px, 4vw, 44px)/1.2 var(--serif); letter-spacing: -.035em; }
+    .architecture p { color: var(--muted); font-size: 14.5px; line-height: 1.9; }
+    .arch-card { padding: 25px; border: 1px solid #e3e4db; border-radius: 7px; background: var(--white); box-shadow: 0 12px 34px #1f34390a; }
+    .arch-row { display: grid; grid-template-columns: 1fr 34px 1fr; align-items: center; gap: 8px; }
+    .arch-box { min-height: 82px; padding: 13px; border: 1px solid #e7e9e2; border-radius: 5px; background: #fbfbf7; }
+    .arch-box.highlight { background: #edf4ee; border-color: #cfdfd2; }
+    .arch-box b { display: block; margin-bottom: 5px; color: var(--navy); font-size: 13px; }
+    .arch-box span { color: #6c7b79; font-size: 12px; line-height: 1.6; }
+    .arch-arrow { text-align: center; color: var(--teal); font-size: 17px; }
+    .arch-branch { margin: 13px 0; text-align: center; color: #75827f; font-size: 12px; }
+    .arch-bottom { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+    .arch-foot { margin: 15px 0 0; padding-top: 12px; border-top: 1px solid #eceee7; color: #73827d; font-size: 12px; text-align: center; }
+
+    .current { padding: 80px 0; background: #e6ece4; }
+    .current-grid { display: grid; grid-template-columns: .8fr 1.2fr; gap: 50px; align-items: start; }
+    .current h2 { margin: 11px 0 12px; font: 500 35px/1.2 var(--serif); }
+    .current p { color: #566662; font-size: 14.5px; line-height: 1.85; }
+    .current-list { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 22px; }
+    .current-list div { display: flex; gap: 9px; align-items: flex-start; padding: 11px 0; border-bottom: 1px solid #cdd8ce; color: #43564f; font-size: 13.5px; }
+    .current-list b { color: var(--teal); font-size: 14px; }
+    .faq-grid { display: grid; grid-template-columns: .75fr 1.25fr; gap: 70px; }
+    .faq-list details { border-top: 1px solid var(--line); padding: 18px 0; }
+    .faq-list details:last-child { border-bottom: 1px solid var(--line); }
+    .faq-list summary { display: flex; justify-content: space-between; gap: 15px; cursor: pointer; list-style: none; font-size: 15.5px; font-weight: 650; }
+    .faq-list summary::-webkit-details-marker { display: none; }
+    .faq-list summary:after { content: "+"; color: var(--teal); font-size: 20px; font-weight: 400; line-height: 1; }
+    .faq-list details[open] summary:after { content: "−"; }
+    .faq-list details p { max-width: 620px; margin: 12px 30px 0 0; color: var(--muted); font-size: 14px; line-height: 1.85; }
+    .closing { padding: 66px 0; color: #f6f5ed; background: var(--navy); }
+    .closing-inner { display: flex; align-items: center; justify-content: space-between; gap: 30px; }
+    .closing h2 { margin: 0 0 8px; font: 500 31px/1.2 var(--serif); }
+    .closing p { margin: 0; color: #c2cdc9; font-size: 14px; }
+    .closing .button { color: var(--navy); background: #e1eee5; border-color: #e1eee5; }
+    .closing .button:hover { color: white; background: var(--teal); border-color: var(--teal); }
+    footer { padding: 22px 0; background: #18313b; color: #b4c1bd; font-size: 12.5px; }
+    .footer-inner { display: flex; justify-content: space-between; gap: 20px; }
+    .reveal { opacity: 1; transform: none; }
+    @media (prefers-reduced-motion: no-preference) {
+      .js .reveal { opacity: 0; transform: translateY(12px); transition: opacity .55s ease, transform .55s ease; }
+      .js .reveal.visible { opacity: 1; transform: none; }
+    }
+    @media (max-width: 850px) {
+      .hero { grid-template-columns: 1fr; gap: 28px; padding-top: 60px; }
+      .hero-visual { min-height: 370px; }
+      .architecture, .current-grid, .faq-grid { grid-template-columns: 1fr; gap: 30px; }
+      .pain-grid, .dl-grid { grid-template-columns: 1fr; }
+      .pain { min-height: auto; }
+      .pain h3 { margin-top: 16px; }
+      .map-list { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 620px) {
+      .wrap { width: min(100% - 32px, 1160px); }
+      .top { height: 66px; }
+      .menu-toggle { display: inline-block; }
+      .nav { display: none; position: absolute; top: 65px; left: 0; right: 0; z-index: 5; padding: 16px; border-bottom: 1px solid var(--line); background: var(--paper); flex-direction: column; align-items: stretch; gap: 12px; }
+      .nav.open { display: flex; }
+      .nav .nav-cta { text-align: center; }
+      .hero { padding: 48px 0 55px; }
+      h1 { font-size: 43px; }
+      .hero-visual { min-height: 330px; }
+      .orb { width: 280px; height: 280px; right: 4%; }
+      .workflow-card { padding: 16px; }
+      .float-note { right: 0; bottom: 3px; }
+      .proofbar { grid-template-columns: 1fr; gap: 13px; align-items: start; }
+      .proof { justify-content: flex-start; }
+      .section { padding: 70px 0; }
+      .features, .steps { grid-template-columns: 1fr; }
+      .feature, .feature:nth-child(odd), .feature:nth-child(even), .step, .step:nth-child(odd), .step:nth-child(even) { min-height: 0; border-right: 0; padding: 22px 0; }
+      .map { padding: 20px 18px; }
+      .map-list div { grid-template-columns: 7em 1fr; }
+      .dl-card { padding: 22px 18px; }
+      .flow { grid-template-columns: 1fr; gap: 19px; }
+      .flow:before { width: 1px; height: auto; top: 18px; bottom: 18px; left: 20px; right: auto; }
+      .flow-step { display: grid; grid-template-columns: 40px 1fr; column-gap: 14px; text-align: left; padding: 0; }
+      .flow-dot { grid-row: span 2; margin: 0; }
+      .flow-step h3 { align-self: end; }
+      .flow-step p { max-width: none; margin: 2px 0 0; }
+      .arch-card { padding: 15px; }
+      .arch-row { grid-template-columns: 1fr 22px 1fr; }
+      .arch-box { padding: 10px; }
+      .current-list { grid-template-columns: 1fr; }
+      .closing-inner, .footer-inner { align-items: flex-start; flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <header class="wrap top">
+    <a class="brand" href="#top" aria-label="Taskflow 首页">
+      <span class="brand-mark">T</span>
+      <span>Taskflow<small>LOCAL AI WORKFLOW</small></span>
+    </a>
+    <button class="menu-toggle" id="menu-toggle" aria-expanded="false" aria-controls="main-nav">菜单</button>
+    <nav class="nav" id="main-nav" aria-label="主导航">
+      <a href="#features">功能</a>
+      <a href="#start">快速上手</a>
+      <a href="#download">下载</a>
+      <a href="#faq">常见问题</a>
+      <a class="nav-cta" href="#download" data-public>下载 <span aria-hidden="true">↓</span></a>
+      <a class="nav-cta" href="./index.html" data-local hidden>打开工作台 <span aria-hidden="true">↗</span></a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="wrap hero">
+      <div>
+        <div class="eyebrow">把 AI 协作变成可管理的产品流程</div>
+        <h1>从一条需求，<br>到一条<em>可验证</em>的<br>执行链。</h1>
+        <p class="hero-copy">产品需求、任务上下文、本地 Agent 和交付记录，不再散落在不同对话里。Taskflow 把它们收进同一条清晰的工作流，让每一步都能被查看、复核和接着做。</p>
+        <div class="hero-actions">
+          <a class="button" href="#download" data-public>下载 Taskflow <span aria-hidden="true">↓</span></a>
+          <a class="button" href="./index.html" data-local hidden>进入工作台 <span aria-hidden="true">→</span></a>
+          <a class="button secondary" href="#start">快速上手</a>
+        </div>
+        <p class="fineprint">Windows 桌面版与 Web 便携版 · 无需账号 · 需求和代码只留在你的电脑</p>
+      </div>
+      <div class="hero-visual" aria-label="需求到交付的工作流示意图">
+        <div class="orb"></div>
+        <div class="workflow-card">
+          <div class="window-bar"><i></i><i></i><i></i><span>REQUIREMENT → VERIFIED DELIVERY</span></div>
+          <div class="wf-label">当前工作流 <span class="live">本地运行</span></div>
+          <div class="req-box">
+            <small>需求 · V1 候选</small>
+            <strong>让 Runner 按任务分配启动本地 Agent</strong>
+            <p>拆清目标、依赖和验收条件，再交给执行器。</p>
+          </div>
+          <div class="wf-line"><span class="wf-num">1</span><span><strong>需求确认与任务拆分</strong><small>人审草稿 · 明确验收标准</small></span><span class="wf-status done">已确认</span></div>
+          <div class="wf-line"><span class="wf-num">2</span><span><strong>冻结任务上下文</strong><small>需求摘要 · 依赖 · 文件范围</small></span><span class="wf-status done">快照 #04</span></div>
+          <div class="wf-line"><span class="wf-num">3</span><span><strong>隔离目录中执行</strong><small>本地 Agent · 独立 Git worktree</small></span><span class="wf-status">待执行</span></div>
+          <div class="wf-line"><span class="wf-num">4</span><span><strong>提交成果供验收</strong><small>结果 · 日志 · diff · 分支</small></span><span class="wf-status">待验收</span></div>
+          <div class="wf-foot"><span>一次任务，一份上下文</span><b>执行过程可追踪 →</b></div>
+        </div>
+        <div class="float-note">WORKSPACE <span>· LOCAL FIRST</span></div>
+      </div>
+    </section>
+
+    <div class="wrap proofbar" aria-label="产品原则">
+      <div class="proof"><b>01</b><span>状态有来源：变更落在本地数据库</span></div>
+      <div class="proof"><b>02</b><span>执行有边界：每个 Run 使用隔离工作区</span></div>
+      <div class="proof"><b>03</b><span>交付可复核：结果、日志和代码差异可查看</span></div>
+    </div>
+
+    <section class="contrast section">
+      <div class="wrap">
+        <div class="section-head reveal">
+          <div class="eyebrow">从协作失序到过程可见</div>
+          <h2>Agent 不只是一个执行按钮。<br>它需要知道任务从哪里来、做到哪里。</h2>
+          <p>当需求、分工和结果散落在多个聊天窗口里，问题往往不是模型不够聪明，而是缺少共享的任务状态、明确的完成标准和可回看的执行记录。</p>
+        </div>
+        <div class="pain-grid">
+          <article class="pain reveal"><span class="pain-no">01 / CONTEXT</span><h3>需求理解容易漂移</h3><p>给 Agent 一份经过确认的任务说明和版本化上下文快照，减少反复解释与信息遗漏。</p></article>
+          <article class="pain reveal"><span class="pain-no">02 / OWNERSHIP</span><h3>任务状态容易失联</h3><p>从待执行、执行中到待验收，状态变化和阻塞原因都可以在执行看板里查看。</p></article>
+          <article class="pain reveal"><span class="pain-no">03 / DELIVERY</span><h3>做完了，却难以验收</h3><p>把运行结果、日志、代码差异和分支一并带回，让负责人基于交付证据作出验收判断。</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="wrap section" id="features">
+      <div class="section-head reveal">
+        <div class="eyebrow">功能 / WHAT IT DOES</div>
+        <h2>从整理需求开始，<br>一步步把执行接起来。</h2>
+        <p>先把单人、本机的工作流做扎实，再根据真实使用反馈决定团队共享与云端协作的边界。</p>
+      </div>
+      <div class="features">
+        <article class="feature reveal"><span class="feature-icon">01</span><div><h3>需求收集与版本决策</h3><p>手动新增、粘贴文本，或导入 JSON / TXT / Markdown / DOCX（先预览，再确认写入）。可搜索、按模块和版本筛选，并把每条需求标为待讨论、保留、修改后保留、延后或不做。</p><span class="tag">需求池</span></div></article>
+        <article class="feature reveal"><span class="feature-icon">02</span><div><h3>AI 分析与可审阅拆分</h3><p>先让模型（配置了 Key 时）或本机 Agent 分析需求；拆分时给出任务草稿和评估，也可能判断“无需拆分”。分析结果和草稿都先由你检查、修改，确认后才创建任务。</p><span class="tag">人审后才执行</span></div></article>
+        <article class="feature reveal"><span class="feature-icon">03</span><div><h3>执行看板与任务流转</h3><p>按待澄清、待执行、执行中、待验收、已完成和阻塞查看任务；支持依赖关系、批量派发、启动和随时终止运行。</p><span class="tag">可视化状态</span></div></article>
+        <article class="feature reveal"><span class="feature-icon">04</span><div><h3>本地 Agent 与自定义 Harness</h3><p>连接本机的 Claude Code、Codex，或你自己的命令行 Agent（如 DeepSeek Harness，在设置里填启动命令与参数）。登录令牌和 Key 只保存在本机，只在启动对应 Agent 时交给那一个进程。</p><span class="tag experimental">本机执行器</span></div></article>
+        <article class="feature reveal"><span class="feature-icon">05</span><div><h3>任务快照与运行历史</h3><p>启动任务时冻结关联需求、全局上下文和任务说明；Run 记录状态、进度、心跳、错误、日志、diff 与交付分支，随时可以回看当时给了 Agent 什么。</p><span class="tag">上下文可回看</span></div></article>
+        <article class="feature reveal"><span class="feature-icon">06</span><div><h3>隔离执行与人工验收</h3><p>代码任务在独立 Git worktree 和分支里运行，Agent 提交后进入待验收；你检查交付、通过或写明原因退回，再用 <code>git merge</code> 自行合入。Taskflow 不会改动你的主分支。</p><span class="tag">分支隔离</span></div></article>
+        <article class="feature reveal"><span class="feature-icon">07</span><div><h3>本机数据与备份</h3><p>需求、任务、快照、Run 和事件保存在本地 SQLite；可随时导出 JSON 备份，用于换电脑或恢复。数据库、备份和密钥放在各自的数据目录，不放进安装包。</p><span class="tag">本地数据</span></div></article>
+        <article class="feature reveal"><span class="feature-icon">08</span><div><h3>桌面版与 Web 便携版</h3><p>Windows 桌面版把本地服务、数据库和 Runner 装进一个窗口；Web 便携版用浏览器访问，包很小。两者都不需要账号，当前构建尚未代码签名。</p><span class="tag later">Windows</span></div></article>
+      </div>
+    </section>
+
+    <section class="flow-section section" id="start">
+      <div class="wrap">
+        <div class="section-head reveal">
+          <div class="eyebrow">快速上手 / HOW TO USE</div>
+          <h2>六步，从一条需求<br>走到一次验收。</h2>
+          <p>第一次使用按顺序做一遍，约十分钟；之后日常只会用到第 4 到第 6 步。名称里带底色的，就是界面里的按钮或菜单。</p>
+        </div>
+        <ol class="steps">
+          <li class="step reveal"><span class="step-no">1</span><div><h3>安装并启动</h3><p><b>桌面版：</b>运行安装包，从开始菜单或桌面打开 Taskflow。</p><p><b>Web 便携版：</b>解压后双击 <code>start-taskflow.cmd</code>，浏览器会自动打开 <code>http://127.0.0.1:4179</code>。</p><p>安装前，先看看 <a href="#download" style="color:var(--teal);text-decoration:underline">下载</a> 部分里要提前装好的东西（Git、Agent 命令行）。</p></div></li>
+          <li class="step reveal"><span class="step-no">2</span><div><h3>选择要改的项目</h3><p>任务会在你指定的 Git 仓库里执行。桌面版：菜单 <span class="ui">工作台 → 选择项目仓库…</span>；Web 版：在 <span class="ui">执行看板</span> 顶部的 <span class="ui">当前项目目录</span> 里填写路径，点 <span class="ui">保存目录</span>。</p><p>选好后 Runner 会自动开始领取任务（桌面版的 <span class="ui">Runner</span> 菜单可停止或重启它）。</p></div></li>
+          <li class="step reveal"><span class="step-no">3</span><div><h3>配好执行器和模型</h3><p>打开侧栏 <span class="ui">设置（Agent 与密钥）</span>：Claude Code 点 <span class="ui">登录 Claude Code</span>，或粘贴订阅令牌 / API Key；Codex 用它自己的登录。想接别的命令行 Agent，点 <span class="ui">添加 Agent</span>。</p><p>想让模型帮你做分析和拆分，再到“模型接口”里填 Claude / OpenAI / DeepSeek 的 Key 和模型名（可选）。看到执行器显示“可用”再往下。</p></div></li>
+          <li class="step reveal"><span class="step-no">4</span><div><h3>放入需求</h3><p>在 <span class="ui">需求清单</span> 点 <span class="ui">新增需求</span>，或用侧栏 <span class="ui">导入需求</span> 粘贴文本、选择 JSON / TXT / Markdown / DOCX 文件；预览候选项，确认后才写入。</p><p>为每条需求选好决策（保留、延后、不做……）和目标版本，同一页可搜索、按模块和版本筛选。</p></div></li>
+          <li class="step reveal"><span class="step-no">5</span><div><h3>分析、拆分并分配</h3><p>在需求行点 <span class="ui">分配 AI</span>，选择只分配、分配并分析，或分配并执行；需求太大时点 <span class="ui">拆分</span>。</p><p>AI 给出的分析和任务草稿会先摆在你面前，你可以改，确认之后才会真正创建任务。可以放心试：不确认就什么都不会发生。</p></div></li>
+          <li class="step reveal"><span class="step-no">6</span><div><h3>执行与验收</h3><p>到 <span class="ui">执行看板</span> 勾选任务点 <span class="ui">执行所选</span>，或 <span class="ui">执行全部待执行</span>；<span class="ui">运行详情</span> 可看进度、日志和心跳，<span class="ui">终止</span> 随时停下。</p><p>完成后任务进入待验收：查看结果和代码差异，通过或写明原因退回。代码在分支 <code>wb/&lt;任务号&gt;-a&lt;次数&gt;</code> 里，用 <code>git diff</code> 查看、<code>git merge</code> 合入。</p></div></li>
+        </ol>
+        <div class="map reveal">
+          <h3>界面速查</h3>
+          <dl class="map-list">
+            <div><dt>需求清单</dt><dd>新增、筛选、决策、导入；每行有分配 AI、拆分、删除</dd></div>
+            <div><dt>执行看板</dt><dd>按状态分栏的任务，批量执行、运行详情、终止、验收</dd></div>
+            <div><dt>AI 协作任务</dt><dd>AI 任务的列表和各次运行，可选执行器后批量执行</dd></div>
+            <div><dt>变更记录</dt><dd>需求和任务的每一次变化</dd></div>
+            <div><dt>设置</dt><dd>Agent 登录、自定义 Agent、模型接口 Key；密钥页面读不回来</dd></div>
+            <div><dt>JSON 备份</dt><dd>导出整库备份；恢复只写入空数据库，不会覆盖现有数据</dd></div>
+          </dl>
+        </div>
+      </div>
+    </section>
+
+    <section class="wrap section" id="workflow">
+      <div class="section-head reveal">
+        <div class="eyebrow">一条任务的完整旅程</div>
+        <h2>让需求经过确认，再变成可检验的交付。</h2>
+        <p>不是让 Agent 自由接管所有工作，而是明确输入、执行边界和由谁确认结果。</p>
+      </div>
+      <div class="flow">
+        <article class="flow-step reveal"><span class="flow-dot">1</span><h3>导入需求</h3><p>整理原始想法，记录目标版本与决策。</p></article>
+        <article class="flow-step reveal"><span class="flow-dot">2</span><h3>拆分与确认</h3><p>检查任务边界、依赖和可验证标准。</p></article>
+        <article class="flow-step reveal"><span class="flow-dot">3</span><h3>领取与执行</h3><p>Runner 在独立工作区启动所选 Agent。</p></article>
+        <article class="flow-step reveal"><span class="flow-dot">4</span><h3>回传成果</h3><p>状态、日志、结果和代码差异归档。</p></article>
+        <article class="flow-step reveal"><span class="flow-dot">5</span><h3>人工验收</h3><p>通过或退回，留下可继续工作的记录。</p></article>
+      </div>
+    </section>
+
+    <section class="flow-section section" id="download">
+      <div class="wrap">
+        <div class="section-head reveal">
+          <div class="eyebrow">下载 / DOWNLOAD</div>
+          <h2>选一种方式，<br>在自己的电脑上运行。</h2>
+          <p>两种方式运行的是同一个 Taskflow，数据都只保存在你的电脑上。目前提供 Windows 版本，当前为 V0.1 预览版。</p>
+        </div>
+        <!--
+          下载地址：
+            桌面安装包 Taskflow Setup 0.1.0.exe（npm run pack:win 生成，约 106 MB）放网盘：
+              把网盘分享链接填进页面末尾脚本开头的 DESKTOP_DOWNLOAD_URL（必须以 https:// 开头），
+              有提取码的话填 DESKTOP_DOWNLOAD_CODE。留空时按钮位置显示“链接即将提供”。
+              （Vercel 免费版命令行部署的源文件总量上限约 100 MB，装不下它。）
+            Web 便携包 Taskflow-Web-0.1.0.zip（npm run pack:taskflow 生成，不到 1 MB）放站点根目录下的 downloads/ 文件夹。
+          更换版本号时，同步修改这里的文件名、zip 的 href 和卡片上的“V0.1.0”。
+        -->
+        <div class="dl-grid">
+          <article class="dl-card primary reveal">
+            <div class="dl-head"><div><h3>Windows 桌面版</h3><p class="dl-meta">推荐 · 安装包 · Windows 10 / 11 · x64</p></div><span class="tag">V0.1.0</span></div>
+            <ul class="dl-list">
+              <li>一个窗口里包含本地服务、数据库和 Runner，不需要安装 Node.js</li>
+              <li>需要另外装好：<b>Git</b>，以及你要用的 Agent 命令行（Claude Code、Codex 等）</li>
+              <li>安装时可选目录，并创建桌面和开始菜单快捷方式</li>
+            </ul>
+            <p class="dl-steps"><b>安装：</b>从网盘下载 <code>Taskflow Setup 0.1.0.exe</code> 并运行 → 打开 Taskflow → 菜单 <span class="ui">工作台 → 选择项目仓库…</span>。当前构建未代码签名，Windows 可能提示“未知发布者”，请只运行从你信任的来源取得的文件。</p>
+            <div class="dl-actions">
+              <div class="dl-row" data-public>
+                <a class="button" id="dl-desktop-link" rel="noopener" hidden>从网盘下载安装包 <span aria-hidden="true">↓</span></a>
+                <span class="dl-size" id="dl-desktop-code" hidden></span>
+                <span class="dl-size" id="dl-desktop-soon">安装包的网盘链接即将提供</span>
+                <span class="dl-size">约 100 MB</span>
+              </div>
+              <span class="dl-size" data-local hidden>你正在运行 Taskflow，无需再下载。</span>
+            </div>
+          </article>
+          <article class="dl-card reveal">
+            <div class="dl-head"><div><h3>Web 便携版</h3><p class="dl-meta">ZIP · 浏览器使用 · Windows</p></div><span class="tag experimental">V0.1.0</span></div>
+            <ul class="dl-list">
+              <li>体积很小（不到 1 MB），解压即用，不需要 npm install</li>
+              <li>需要另外装好：<b>Node.js 22.13 或更新版本</b>、<b>Git</b>，以及你要用的 Agent 命令行</li>
+              <li>数据默认在 <code>%LOCALAPPDATA%\Taskflow\data</code>，不在压缩包里</li>
+            </ul>
+            <p class="dl-steps"><b>使用：</b>解压 → 双击 <code>start-taskflow.cmd</code> → 浏览器打开 <code>http://127.0.0.1:4179</code>。关闭启动窗口或按 <code>Ctrl+C</code> 即可停止服务和 Runner。</p>
+            <div class="dl-actions">
+              <a class="button secondary" href="./downloads/Taskflow-Web-0.1.0.zip" data-public>下载 ZIP <span aria-hidden="true">↓</span></a>
+              <span class="dl-size" data-public>不到 1 MB</span>
+              <span class="dl-size" data-local hidden>你正在运行 Taskflow，无需再下载。</span>
+            </div>
+          </article>
+        </div>
+        <p class="notice info reveal"><b>两个版本的数据不互通。</b>桌面版和 Web 便携版默认使用不同的数据目录；要从一个迁到另一个，先在旧的里用侧栏 <span class="ui">JSON 备份</span> 导出，再到新的里导入。</p>
+        <p class="notice reveal"><b>暂时没有 macOS / Linux 安装包。</b>手上有项目源码并装有 Node.js 22.13+ 的话，可以在项目目录运行 <code>npm run taskflow</code> 启动同样的 Web + Runner。</p>
+      </div>
+    </section>
+
+    <section class="wrap section" id="local">
+      <div class="architecture">
+        <div class="reveal">
+          <div class="eyebrow">数据留在你自己的电脑</div>
+          <h2>本地状态，<br>本地执行，交付归你。</h2>
+          <p>当前版本是本机单人工作区。页面只通过回环地址访问本地服务；服务把状态写入 SQLite，Runner 只在本机调用你配置的 Agent，并在所选 Git 仓库的隔离分支里执行。</p>
+          <p>这不是云端协作服务：没有团队账号、多成员权限、跨设备共享和云端调度。只有你配置了模型 Key、并使用模型分析或拆分时，需求标题、说明和全局上下文才会发给你选择的那家模型服务。</p>
+        </div>
+        <div class="arch-card reveal" aria-label="本地数据架构示意">
+          <div class="arch-row">
+            <div class="arch-box"><b>工作台窗口</b><span>需求、看板、上下文与验收</span></div>
+            <div class="arch-arrow">↔</div>
+            <div class="arch-box highlight"><b>本地 API + SQLite</b><span>状态机 · 快照 · Run 历史</span></div>
+          </div>
+          <div class="arch-branch">仅监听本机回环地址 · 不将本地目录开放给网页云端</div>
+          <div class="arch-bottom">
+            <div class="arch-box"><b>本地 Runner</b><span>领取任务 · 进度回传 · 可取消</span></div>
+            <div class="arch-box"><b>隔离 Git worktree</b><span>Agent 执行 · diff 与分支交付</span></div>
+          </div>
+          <div class="arch-foot">数据库、备份与密钥在用户数据目录 · 支持 JSON 备份与恢复</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="current">
+      <div class="wrap current-grid">
+        <div class="reveal">
+          <div class="eyebrow">当前版本 / V0.1 PREVIEW</div>
+          <h2>先把单机执行链跑通。</h2>
+          <p>现在适合个人在本机验证需求管理、Agent 执行与交付验收流程。团队共享、云端数据库、成员权限和自动更新尚未实现，路线图不当作现成功能。</p>
+        </div>
+        <div class="current-list reveal">
+          <div><b>✓</b><span>需求导入、列表筛选与版本决策</span></div>
+          <div><b>✓</b><span>AI 分析与拆分草稿审核</span></div>
+          <div><b>✓</b><span>依赖任务看板与状态流转</span></div>
+          <div><b>✓</b><span>本机 Runner 与自定义命令行 Agent</span></div>
+          <div><b>✓</b><span>运行快照、历史、日志与 diff</span></div>
+          <div><b>✓</b><span>本地 SQLite 与 JSON 备份恢复</span></div>
+          <div><b>✓</b><span>Windows 安装包与 Web 便携版（未签名）</span></div>
+          <div><b>…</b><span>代码签名、自动更新、macOS / Linux 安装包</span></div>
+          <div><b>…</b><span>多成员实时协作与共享上下文</span></div>
+          <div><b>…</b><span>云端调度与远程 Agent</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="wrap section" id="faq">
+      <div class="faq-grid">
+        <div class="section-head reveal">
+          <div class="eyebrow">常见问题</div>
+          <h2>开始之前，<br>先了解边界。</h2>
+          <p>这个预览版主要验证“需求如何更清楚地交给 Agent，结果如何可靠地收回来”。</p>
+        </div>
+        <div class="faq-list reveal">
+          <details><summary>需要提前装什么？</summary><p>桌面版：<b>Git</b>，加上你要用的 Agent 命令行（Claude Code、Codex 等）。Web 便携版：再加 <b>Node.js 22.13 或更新版本</b>。Taskflow 自己不带 AI 模型，也不替你登录；Agent 的登录和额度都在你本机管理。</p></details>
+          <details><summary>安装时 Windows 提示“未知发布者”怎么办？</summary><p>当前构建还没有代码签名，SmartScreen 会提示。只运行从你信任的来源取得的安装包；确认无误后，在提示里选“更多信息”再选“仍要运行”。签名证书是后续发布工作。</p></details>
+          <details><summary>数据存在哪里？会上传到云端吗？</summary><p>不会同步到云端。桌面版放在当前 Windows 用户的数据目录里（菜单 <span class="ui">工作台 → 打开数据目录</span> 可直达），Web 便携版默认在 <code>%LOCALAPPDATA%\Taskflow\data</code>。只有你配置了模型 Key 并使用模型分析或拆分时，需求标题、说明和全局上下文（勾选“附带项目概况”时还有 README 和目录结构）才会发给你选的那家模型服务。</p></details>
+          <details><summary>Agent 会直接改我的主分支吗？</summary><p>不会。每次执行都在独立的 Git worktree 和分支里进行，起点是项目当前的 <code>HEAD</code>，不会复制你未提交的修改；结束后提交到 <code>wb/…</code> 分支。分析类任务只读。是否合入由你用 <code>git merge</code> 决定。</p></details>
+          <details><summary>怎么接 DeepSeek 或别的模型？</summary><p>有两种用法。一是在设置的“模型接口”里填 Claude / OpenAI / DeepSeek 的 Key 和模型名，用于需求分析和拆分；二是把它的命令行工具作为自定义 Agent 来执行任务，在 <span class="ui">添加 Agent</span> 里填启动命令和参数。Taskflow 不预设未经确认的命令格式。</p></details>
+          <details><summary>可以多人跨电脑一起用吗？</summary><p>目前不可以。现在是单机单人数据库；多成员权限、实时共享状态、云端服务和远程 Agent 调度属于后续架构工作。换电脑请先用 <span class="ui">JSON 备份</span> 导出。</p></details>
+        </div>
+      </div>
+    </section>
+
+    <section class="closing">
+      <div class="wrap closing-inner">
+        <div><h2>让每个 Agent 任务都有来处，也有结果。</h2><p>从一条需求开始，逐步建立可复用、可检查的执行流程。</p></div>
+        <a class="button" href="#download" data-public>下载 Taskflow <span aria-hidden="true">↓</span></a>
+        <a class="button" href="./index.html" data-local hidden>打开本地工作台 <span aria-hidden="true">↗</span></a>
+      </div>
+    </section>
+  </main>
+  <footer><div class="wrap footer-inner"><span>Taskflow · 本地 AI 协作工作台</span><span>V0.1 PREVIEW · 功能以当前构建为准</span></div></footer>
+  <script>
+    // The desktop installer is too big for the static host, so it is shared from a network drive: paste the share link
+    // (it must start with https://) and the extraction code, if there is one, between the quotes. Empty = "coming soon".
+    const DESKTOP_DOWNLOAD_URL = "";
+    const DESKTOP_DOWNLOAD_CODE = "";
+    document.documentElement.classList.add("js");
+    if (/^https:\/\//.test(DESKTOP_DOWNLOAD_URL)) {
+      const link = document.getElementById("dl-desktop-link");
+      link.href = DESKTOP_DOWNLOAD_URL;
+      link.hidden = false;
+      document.getElementById("dl-desktop-soon").hidden = true;
+      if (DESKTOP_DOWNLOAD_CODE) {
+        const code = document.getElementById("dl-desktop-code");
+        code.textContent = `提取码：${DESKTOP_DOWNLOAD_CODE}`;
+        code.hidden = false;
+      }
+    }
+    // Served by the local app (loopback address): offer "open the workbench". Anywhere else (the public site): offer downloads.
+    const local = ["127.0.0.1", "localhost", "[::1]"].includes(location.hostname);
+    document.querySelectorAll("[data-local]").forEach((node) => { node.hidden = !local; });
+    document.querySelectorAll("[data-public]").forEach((node) => { node.hidden = local; });
+    const toggle = document.getElementById("menu-toggle");
+    const nav = document.getElementById("main-nav");
+    toggle.addEventListener("click", () => {
+      const open = nav.classList.toggle("open");
+      toggle.setAttribute("aria-expanded", String(open));
+    });
+    nav.addEventListener("click", (event) => {
+      if (event.target.closest("a")) {
+        nav.classList.remove("open");
+        toggle.setAttribute("aria-expanded", "false");
+      }
+    });
+    if ("IntersectionObserver" in window && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      const observer = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("visible");
+            observer.unobserve(entry.target);
+          }
+        }
+      }, { threshold: 0.12 });
+      document.querySelectorAll(".reveal").forEach((node) => observer.observe(node));
+    } else {
+      document.querySelectorAll(".reveal").forEach((node) => node.classList.add("visible"));
+    }
+  </script>
+</body>
+</html>

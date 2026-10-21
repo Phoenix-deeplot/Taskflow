@@ -30,6 +30,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -46,19 +47,59 @@ next-env.d.ts
 !/build/sites-vite-plugin.ts
 !/build/sites-worker.ts
 
-/dist/
-!/dist/
+# dist/ is hand-written page source, not build output: every page and script directly inside it is tracked automatically
+# (a new file used to be silently left out until someone listed it here, and the page then broke on a fresh clone).
+# Subfolders such as dist/assets/ stay ignored. Do not add a bare "/dist/" line after these: it re-ignores everything.
 /dist/*
-!/dist/index.html
-!/dist/enhancements.js
-!/dist/agent-control.js
-!/dist/dialogs.js
-!/dist/settings-panel.js
+!/dist/*.html
+!/dist/*.js
+
+# Local data and run workspaces: the database, backups, agent secrets and Runner worktrees.
 /data/
 /.wrangler/
+/work/
+.work
+
 # Checkout-local execution profile and tool state; never publish them.
 /.sites-runtime/
 /.agents/
 /.codex/
 /outputs/
-/work/
+.claude
+.history
+# (.openai is already tracked; ignoring it only takes effect after: git rm -r --cached .openai)
+.openai
+# docs/: NEW files in it are no longer picked up by "git add". Files already tracked stay tracked (and their edits are still
+# committed) until you run: git rm -r --cached docs
+/docs/
+
+# Packaging output. Installers are 100 MB+ (GitHub rejects files over 100 MB), so they never go into git: attach them to
+# a release, or copy them into the site/ staging folder that is uploaded to Vercel together with dist/cover.html.
+/release/
+/site/
+*.exe
+*.msi
+*.dmg
+*.AppImage
+*.blockmap
+
+# Local databases and secrets (the app keeps them in its own data folder; this is a second line of defence)
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+agent-secrets*.json
+
+# Code-signing certificates and private keys (for when the installer gets signed)
+*.pfx
+*.p12
+*.key
+
+# Logs, editor and OS files
+*.log
+.idea/
+.vscode/
+*.swp
+*.tsbuildinfo
+Thumbs.db
+Desktop.ini
